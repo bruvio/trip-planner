@@ -13,18 +13,18 @@ Usage examples:
 """
 
 import argparse
-import concurrent.futures
 import json
 import logging
 import math
 import sys
 import time
 import urllib.error
-import urllib.request
 import urllib.parse
+import urllib.request
 import webbrowser
 from datetime import datetime
 from pathlib import Path
+
 
 # ─── ANSI colours ───────────────────────────────────────────
 class C:
@@ -405,13 +405,13 @@ def prompt_vehicle_config(args):
     """Interactively prompt for vehicle configuration."""
     section('Vehicle Configuration', '🚗')
     print()
-    print(f'  Select a vehicle preset or enter custom values:')
+    print('  Select a vehicle preset or enter custom values:')
     print()
     for key, (name, *_) in VEHICLE_PRESETS.items():
         print(f'    [{key}] {name}')
-    print(f'    [0] Custom')
+    print('    [0] Custom')
     print()
-    choice = input(f'  Choice [1]: ').strip() or '1'
+    choice = input('  Choice [1]: ').strip() or '1'
 
     if choice in VEHICLE_PRESETS:
         name, fuel_type, eff, tank, price, currency = VEHICLE_PRESETS[choice]
@@ -429,7 +429,7 @@ def prompt_vehicle_config(args):
                 args.kwh_price = _input_float('Price per kWh', 0.35)
     else:
         print(f'  {c("->", C.GREEN)} Custom configuration')
-        ft = input(f'  Fuel type (petrol/diesel/electric/hybrid) [diesel]: ').strip().lower() or 'diesel'
+        ft = input('  Fuel type (petrol/diesel/electric/hybrid) [diesel]: ').strip().lower() or 'diesel'
         if ft not in ('petrol', 'diesel', 'electric', 'hybrid'):
             ft = 'diesel'
         args.fuel_type = ft
@@ -479,7 +479,7 @@ def generate_markdown(waypoints, route, pois, costs, args) -> str:
         f'# Road Trip Report: {title}',
         '',
         f'**Generated:** {now}  ',
-        f'**Tool:** Road Trip Planner CLI (OpenStreetMap / OSRM / Overpass API)  ',
+        '**Tool:** Road Trip Planner CLI (OpenStreetMap / OSRM / Overpass API)  ',
         '',
         '## Route', '',
     ]
@@ -519,7 +519,7 @@ def generate_markdown(waypoints, route, pois, costs, args) -> str:
         lines.append(f'## {info["icon"]} {info["title"]}')
         lines.append('')
         if not items:
-            lines.append(f'_None found near route._')
+            lines.append('_None found near route._')
             lines.append('')
             continue
         lines.append('| Name | Details | Distance from Route |')
