@@ -1,0 +1,44 @@
+name: Conventional Commits Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  pull-requests: read
+  statuses: write
+
+jobs:
+  check-commits:
+    name: Validate Conventional Commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check commit messages
+        shell: bash
+        run: |
+          PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?!?:\s.+'
+          FAILED=0
+          while IFS= read -r sha; do
+            # Skip merge commits
+            if [ "$(git rev-list --parents -n1 "$sha" | wc -w)" -gt 2 ]; then
+              continue
+            fi
+            MSG=$(git log --format='%s' -n1 "$sha")
+            if ! echo "$MSG" | grep -qE "$PATTERN"; then
+              echo "Non-conventional commit: $MSG ($sha)"
+              FAILED=1
+            fi
+          done < <(git log --format='%H' origin/${{ github.base_ref }}..${{ github.event.pull_request.head.sha }})
+
+          if [ "$FAILED" -eq 1 ]; then
+            echo ""
+            echo "Commits must follow Conventional Commits: https://www.conventionalcommits.org"
+            echo "Format: <type>(<optional scope>): <description>"
+            echo "Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+            exit 1
+          fi
+          echo "All commits follow Conventional Commits"
