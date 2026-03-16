@@ -169,24 +169,23 @@ class TestAnalyzeRoute:
 
     def test_ferry_detection(self):
         route = {
-            "legs": [
-                {
-                    "steps": [
-                        {
-                            "mode": "ferry",
-                            "name": "Dover-Calais",
-                            "distance": 50000,
-                            "duration": 5400,
-                            "geometry": {"coordinates": [[1.8, 51.0], [1.9, 50.9]]},
-                        }
-                    ]
-                }
-            ]
+            "distance": 50000,
+            "duration": 5400,
+            "geometry": {"coordinates": [[-1.2, 51.8], [1.8, 48.8]]},
+            "has_ferry": True,
+            "has_toll": False,
+            "toll_km": 0,
+            "ferry_segments": [
+                {"name": "Dover-Calais", "distance_km": 50, "duration_min": 90},
+            ],
         }
         result = tp.analyze_route(route)
         assert result["has_ferry"] is True
         assert len(result["ferry_segments"]) == 1
         assert result["ferry_segments"][0]["name"] == "Dover-Calais"
+        assert result["is_channel_crossing"] is True
+        assert "GB" in result["countries"]
+        assert "FR" in result["countries"]
 
 
 class TestEstimateTollCost:
