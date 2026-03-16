@@ -123,16 +123,157 @@ def geocode(query: str) -> dict:
 
 
 # ─── ROUTING ─────────────────────────────────────────────────
-def route_osrm(waypoints: list) -> dict:
+def route_osrm(waypoints: list, alternatives=False, exclude=None, steps=True) -> list:
+    """Request route(s) from OSRM. Returns a list of route dicts."""
     coords = ";".join(f"{p['lon']},{p['lat']}" for p in waypoints)
-    url = (
-        f"https://router.project-osrm.org/route/v1/driving/{coords}"
-        f"?overview=full&geometries=geojson&steps=false"
-    )
+    params = f"overview=full&geometries=geojson&steps={'true' if steps else 'false'}"
+    if alternatives:
+        params += "&alternatives=true"
+    if exclude:
+        params += f"&exclude={exclude}"
+    url = f"https://router.project-osrm.org/route/v1/driving/{coords}?{params}"
+    log.debug("OSRM request: %s", url[:120])
     data = http_get(url)
     if data.get("code") != "Ok":
         raise RuntimeError("Routing failed: " + data.get("message", "unknown error"))
-    return data["routes"][0]
+    return data["routes"]
+
+
+# ─── ROUTE ANALYSIS ─────────────────────────────────────────
+# Country bounding boxes for toll rate estimation (lat_min, lat_max, lon_min, lon_max)
+COUNTRY_BOXES = {
+    'FR': (42.3, 51.1, -5.1, 8.2),
+    'IT': (36.6, 47.1, 6.6, 18.5),
+    'ES': (36.0, 43.8, -9.3, 3.3),
+    'CH': (45.8, 47.8, 5.9, 10.5),
+    'AT': (46.4, 49.0, 9.5, 17.2),
+    'DE': (47.3, 55.1, 5.9, 15.0),
+    'GB': (49.9, 58.7, -8.2, 1.8),
+}
+
+# Approximate toll rate per km on motorways (in EUR)
+TOLL_RATES_EUR = {
+    'FR': 0.09,
+    'IT': 0.07,
+    'ES': 0.10,
+    'CH': 0.00,  # vignette system, flat fee
+    'AT': 0.00,  # vignette system, flat fee
+    'DE': 0.00,  # no car tolls
+    'GB': 0.00,  # no general motorway tolls
+}
+TOLL_RATE_DEFAULT = 0.08
+
+# Vignette costs (flat fees for countries that use them)
+VIGNETTE_COSTS_EUR = {
+    'CH': 40.0,  # 1-year vignette (mandatory)
+    'AT': 10.0,  # 10-day vignette
+}
+
+
+def _point_country(lat, lon):
+    """Guess country from lat/lon using bounding boxes. Returns country code or None."""
+    for code, (lat_min, lat_max, lon_min, lon_max) in COUNTRY_BOXES.items():
+        if lat_min <= lat <= lat_max and lon_min <= lon <= lon_max:
+            return code
+    return None
+
+
+def analyze_route(route):
+    """Analyze a route's steps for tolls, ferries, tunnels.
+
+    Args:
+        route: OSRM route dict with legs/steps.
+
+    Returns:
+        Dict with toll/ferry analysis results.
+    """
+    has_toll = False
+    has_ferry = False
+    ferry_segments = []
+    toll_km = 0
+    toll_km_by_country = {}
+    countries_traversed = set()
+
+    for leg in route.get("legs", []):
+        for step in leg.get("steps", []):
+            classes = step.get("intersections", [{}])[0].get("classes", []) if step.get("intersections") else []
+            # Also check step-level classes (OSRM version dependent)
+            step_classes = step.get("classes", [])
+            all_classes = set(classes) | set(step_classes)
+
+            # Detect country from step geometry
+            geom = step.get("geometry", {}).get("coordinates", [])
+            if geom:
+                mid = geom[len(geom) // 2]
+                country = _point_country(mid[1], mid[0])
+                if country:
+                    countries_traversed.add(country)
+
+            if "toll" in all_classes:
+                has_toll = True
+                step_km = step.get("distance", 0) / 1000
+                toll_km += step_km
+                if geom:
+                    mid = geom[len(geom) // 2]
+                    cc = _point_country(mid[1], mid[0]) or "XX"
+                    toll_km_by_country[cc] = toll_km_by_country.get(cc, 0) + step_km
+
+            if step.get("mode") == "ferry" or "ferry" in all_classes:
+                has_ferry = True
+                ferry_segments.append(
+                    {
+                        "name": step.get("name", "Ferry"),
+                        "distance_km": step.get("distance", 0) / 1000,
+                        "duration_min": step.get("duration", 0) / 60,
+                    }
+                )
+
+    # Check if this is a UK-France ferry (Eurotunnel suggestion)
+    is_channel_crossing = has_ferry and "GB" in countries_traversed and "FR" in countries_traversed
+
+    return {
+        "has_toll": has_toll,
+        "toll_km": toll_km,
+        "toll_km_by_country": toll_km_by_country,
+        "has_ferry": has_ferry,
+        "ferry_segments": ferry_segments,
+        "countries": countries_traversed,
+        "is_channel_crossing": is_channel_crossing,
+    }
+
+
+def estimate_toll_cost(analysis, currency="GBP"):
+    """Estimate toll costs from route analysis using per-country heuristics."""
+    eur_to = {"GBP": 0.86, "EUR": 1.0, "USD": 1.08}.get(currency, 1.0)
+    total_eur = 0
+
+    for cc, km in analysis.get("toll_km_by_country", {}).items():
+        rate = TOLL_RATES_EUR.get(cc, TOLL_RATE_DEFAULT)
+        total_eur += km * rate
+
+    # Add vignette costs for countries traversed
+    for cc in analysis.get("countries", set()):
+        if cc in VIGNETTE_COSTS_EUR:
+            total_eur += VIGNETTE_COSTS_EUR[cc]
+
+    return total_eur * eur_to
+
+
+def deduplicate_routes(route_list):
+    """Remove routes with nearly identical distance (within 1%)."""
+    seen = []
+    unique = []
+    for label, route, analysis in route_list:
+        dist = route["distance"]
+        is_dup = False
+        for seen_dist in seen:
+            if abs(dist - seen_dist) / max(seen_dist, 1) < 0.01:
+                is_dup = True
+                break
+        if not is_dup:
+            seen.append(dist)
+            unique.append((label, route, analysis))
+    return unique
 
 
 # ─── DISTANCE ───────────────────────────────────────────────
@@ -403,7 +544,7 @@ POI_TYPES = {
 
 
 # ─── COST CALCULATIONS ───────────────────────────────────────
-def calc_costs(dist_km: float, args) -> dict:
+def calc_costs(dist_km: float, args, toll_estimate=0) -> dict:
     sym = {"GBP": "\u00a3", "EUR": "\u20ac", "USD": "$"}.get(args.currency, "\u00a3")
     fuel_cost = ev_cost = 0
     refills = 0
@@ -419,7 +560,8 @@ def calc_costs(dist_km: float, args) -> dict:
     if args.fuel_type == "hybrid":
         ev_cost = (dist_km / 100) * args.kwh * args.kwh_price * 0.3
 
-    toll = args.tolls
+    # Use manual --tolls if provided, otherwise use auto-estimate
+    toll = args.tolls if args.tolls else toll_estimate
     total = fuel_cost + ev_cost + toll
     return {
         "fuel_cost": fuel_cost,
@@ -853,6 +995,14 @@ def main():
         help="Interactively configure vehicle/cost parameters",
     )
 
+    # Route mode
+    parser.add_argument(
+        "--route-mode",
+        choices=["fastest", "shortest", "no-tolls", "no-ferries", "scenic", "compare"],
+        default=None,
+        help="Route selection: fastest, shortest, no-tolls, no-ferries, scenic, compare (default: compare if interactive)",
+    )
+
     # POI control
     parser.add_argument("--no-fuel", action="store_true", help="Skip fuel station search")
     parser.add_argument("--no-ev", action="store_true", help="Skip EV charger search")
@@ -961,22 +1111,165 @@ def main():
             print(c(f"FAIL {e}", C.RED))
             sys.exit(1)
 
-    # ── Plan route ──
-    section("Calculating Route", "🗺️")
-    try:
-        print(f"  {c('->', C.GREEN)} Requesting route from OSRM...", end=" ", flush=True)
-        route = route_osrm(waypoints)
-        print(c("OK", C.GREEN))
-    except Exception as e:
-        print(c(f"FAIL {e}", C.RED))
-        sys.exit(1)
+    # ── Determine route mode ──
+    route_mode = args.route_mode
+    if route_mode is None:
+        route_mode = "compare" if is_tty else "fastest"
 
+    # ── Plan route(s) ──
+    section("Calculating Routes", "🗺️")
+
+    all_route_options = []  # list of (label, route, analysis)
+
+    # Request 1: default route + alternatives
+    if route_mode in ("fastest", "shortest", "compare"):
+        try:
+            print(f"  {c('->', C.GREEN)} Requesting routes from OSRM...", end=" ", flush=True)
+            routes = route_osrm(waypoints, alternatives=(route_mode == "compare"), steps=True)
+            print(c(f"OK ({len(routes)} option(s))", C.GREEN))
+            for i, r in enumerate(routes):
+                label = "Fastest" if i == 0 else f"Alternative {i}"
+                all_route_options.append((label, r, analyze_route(r)))
+        except Exception as e:
+            print(c(f"FAIL {e}", C.RED))
+            sys.exit(1)
+    elif route_mode == "no-tolls":
+        try:
+            print(f"  {c('->', C.GREEN)} Requesting toll-free route...", end=" ", flush=True)
+            routes = route_osrm(waypoints, exclude="toll", steps=True)
+            print(c("OK", C.GREEN))
+            all_route_options.append(("Toll-free", routes[0], analyze_route(routes[0])))
+        except Exception as e:
+            print(c(f"FAIL {e} (toll-free route may not exist)", C.RED))
+            sys.exit(1)
+    elif route_mode == "no-ferries":
+        try:
+            print(f"  {c('->', C.GREEN)} Requesting ferry-free route...", end=" ", flush=True)
+            routes = route_osrm(waypoints, exclude="ferry", steps=True)
+            print(c("OK", C.GREEN))
+            all_route_options.append(("No ferry", routes[0], analyze_route(routes[0])))
+        except Exception as e:
+            print(c(f"FAIL {e}", C.RED))
+            sys.exit(1)
+    elif route_mode == "scenic":
+        try:
+            print(f"  {c('->', C.GREEN)} Requesting scenic route (no motorways)...", end=" ", flush=True)
+            routes = route_osrm(waypoints, exclude="motorway", steps=True)
+            print(c("OK", C.GREEN))
+            all_route_options.append(("Scenic", routes[0], analyze_route(routes[0])))
+        except Exception as e:
+            print(c(f"FAIL {e}", C.RED))
+            sys.exit(1)
+
+    # For compare mode: request toll-free, ferry-free, and scenic variants
+    if route_mode == "compare" and all_route_options:
+        default_analysis = all_route_options[0][2]
+
+        # Toll-free variant (cheapest)
+        if default_analysis["has_toll"]:
+            try:
+                print(f"  {c('->', C.GREEN)} Requesting toll-free route...", end=" ", flush=True)
+                no_toll_routes = route_osrm(waypoints, exclude="toll", steps=True)
+                print(c("OK", C.GREEN))
+                all_route_options.append(
+                    ("Cheapest", no_toll_routes[0], analyze_route(no_toll_routes[0]))
+                )
+            except Exception:
+                print(c("N/A (no toll-free route exists)", C.GREY))
+
+        # Ferry-free variant
+        if default_analysis["has_ferry"]:
+            try:
+                print(f"  {c('->', C.GREEN)} Requesting ferry-free route...", end=" ", flush=True)
+                no_ferry_routes = route_osrm(waypoints, exclude="ferry", steps=True)
+                print(c("OK", C.GREEN))
+                all_route_options.append(
+                    ("No ferry", no_ferry_routes[0], analyze_route(no_ferry_routes[0]))
+                )
+            except Exception:
+                print(c("N/A (no ferry-free route exists)", C.GREY))
+
+        # Scenic variant (avoid motorways)
+        try:
+            print(f"  {c('->', C.GREEN)} Requesting scenic route...", end=" ", flush=True)
+            scenic_routes = route_osrm(waypoints, exclude="motorway", steps=True)
+            print(c("OK", C.GREEN))
+            all_route_options.append(
+                ("Scenic", scenic_routes[0], analyze_route(scenic_routes[0]))
+            )
+        except Exception:
+            print(c("N/A (scenic route not available)", C.GREY))
+
+    # Deduplicate and apply smart labels
+    all_route_options = deduplicate_routes(all_route_options)
+
+    # Label the shortest route if it differs from fastest
+    if len(all_route_options) > 1:
+        shortest_idx = min(range(len(all_route_options)),
+                           key=lambda i: all_route_options[i][1]["distance"])
+        fastest_idx = min(range(len(all_route_options)),
+                          key=lambda i: all_route_options[i][1]["duration"])
+        label, r, a = all_route_options[shortest_idx]
+        if shortest_idx != fastest_idx and label.startswith("Alternative"):
+            all_route_options[shortest_idx] = ("Shortest", r, a)
+
+    # ── Route comparison table (ViaMichelin style) ──
+    if len(all_route_options) > 1 and route_mode == "compare":
+        section("Route Options", "🔀")
+        sym_preview = {"GBP": "\u00a3", "EUR": "\u20ac", "USD": "$"}.get(args.currency, "\u00a3")
+        print()
+        for i, (label, r, analysis) in enumerate(all_route_options, 1):
+            toll_est = estimate_toll_cost(analysis, args.currency)
+            fuel_est = calc_costs(r["distance"] / 1000, args, toll_estimate=toll_est)
+            marker = c(f"  [{i}] ", C.CYAN)
+            print(f"{marker}{bold(c(label, C.AMBER))}")
+            detail_parts = [
+                fmt_dist(r["distance"]),
+                fmt_time(r["duration"]),
+            ]
+            if analysis["has_toll"]:
+                detail_parts.append(f"tolls: ~{sym_preview}{toll_est:.0f} ({analysis['toll_km']:.0f} km)")
+            else:
+                detail_parts.append("no tolls")
+            if analysis["has_ferry"]:
+                names = [s["name"] for s in analysis["ferry_segments"]]
+                detail_parts.append(f"ferry: {', '.join(names)}")
+            detail_parts.append(f"total: ~{sym_preview}{fuel_est['total']:.0f}")
+            print(f"      {c(' | ', C.GREY).join(detail_parts)}")
+            print()
+        print(c("  " + "-" * 60, C.GREY))
+
+        # Prompt for selection if interactive
+        if is_tty:
+            try:
+                choice = input(f"  Select route [1]: ").strip() or "1"
+                idx = int(choice) - 1
+                if 0 <= idx < len(all_route_options):
+                    selected_idx = idx
+                else:
+                    selected_idx = 0
+            except (ValueError, EOFError, KeyboardInterrupt):
+                selected_idx = 0
+        else:
+            selected_idx = 0
+    elif route_mode == "shortest" and len(all_route_options) > 1:
+        # Pick shortest distance
+        selected_idx = min(range(len(all_route_options)),
+                           key=lambda i: all_route_options[i][1]["distance"])
+    else:
+        selected_idx = 0
+
+    selected_label, route, route_analysis = all_route_options[selected_idx]
     dist_m = route["distance"]
     dist_km = dist_m / 1000
     dur_s = route["duration"]
     route_coords = route["geometry"]["coordinates"]
+    toll_auto_estimate = estimate_toll_cost(route_analysis, args.currency)
 
-    print()
+    # ── Display selected route ──
+    section("Selected Route", "🗺️")
+    if len(all_route_options) > 1:
+        row("Route type", selected_label)
     row("From", waypoints[0]["display_name"].split(",")[0].strip())
     for i, wp in enumerate(waypoints[1:-1], 1):
         row(f"Via {i}", wp["display_name"].split(",")[0].strip())
@@ -984,8 +1277,25 @@ def main():
     row("Distance", fmt_dist(dist_m))
     row("Driving Time", fmt_time(dur_s) + "  (no stops)")
 
+    # Toll/ferry info
+    if route_analysis["has_toll"]:
+        toll_detail = f"Yes ({route_analysis['toll_km']:.0f} km on toll roads)"
+        row("Toll roads", toll_detail, C.AMBER)
+    else:
+        row("Toll roads", "None detected", C.GREEN)
+
+    if route_analysis["has_ferry"]:
+        for seg in route_analysis["ferry_segments"]:
+            ferry_detail = f"{seg['name']} ({seg['distance_km']:.0f} km, ~{seg['duration_min']:.0f} min)"
+            row("Ferry crossing", ferry_detail, C.BLUE)
+        print(f"  {c('  (ferry booking required, cost not included)', C.GREY)}")
+        if route_analysis["is_channel_crossing"]:
+            print(
+                f"  {c('  Eurotunnel (Folkestone-Calais) is an alternative: ~35 min, ~GBP 150-200/car', C.GREY)}"
+            )
+
     # ── Costs ──
-    costs = calc_costs(dist_km, args)
+    costs = calc_costs(dist_km, args, toll_estimate=toll_auto_estimate)
     sym = costs["sym"]
 
     section("Cost Estimate", "💰")
@@ -1000,7 +1310,12 @@ def main():
         row("Consumption", f"{args.kwh} kWh/100km")
         row("kWh price", f"{sym}{args.kwh_price}")
         row("Total charging", fmt_cost(sym, costs["ev_cost"]))
-    row("Tolls (manual)", fmt_cost(sym, costs["toll"]))
+    if args.tolls:
+        row("Tolls (manual)", fmt_cost(sym, costs["toll"]))
+    elif route_analysis["has_toll"]:
+        row("Tolls (estimated)", fmt_cost(sym, costs["toll"]), C.AMBER)
+    else:
+        row("Tolls", fmt_cost(sym, 0))
     print()
     print(
         f"  {c('TOTAL ESTIMATE'.ljust(28), C.AMBER)}{bold(c(fmt_cost(sym, costs['total']), C.AMBER))}"
@@ -1082,14 +1397,21 @@ def main():
     # ── Summary ──
     section("Summary", "📋")
     row("Route", f"{waypoints[0]['short']} -> {waypoints[-1]['short']}")
+    if len(all_route_options) > 1:
+        row("Route type", selected_label)
     row("Distance", fmt_dist(dist_m))
     row("Drive time", fmt_time(dur_s))
+    if route_analysis["has_toll"]:
+        row("Toll roads", f"{route_analysis['toll_km']:.0f} km")
+    if route_analysis["has_ferry"]:
+        row("Ferry crossings", str(len(route_analysis["ferry_segments"])))
     row("Fuel cost", fmt_cost(sym, costs["fuel_cost"]) if args.fuel_type != "electric" else "-")
     row(
         "Charging cost",
         fmt_cost(sym, costs["ev_cost"]) if args.fuel_type in ("electric", "hybrid") else "-",
     )
-    row("Toll cost", fmt_cost(sym, costs["toll"]))
+    toll_label = "Toll cost (estimated)" if not args.tolls and route_analysis["has_toll"] else "Toll cost"
+    row(toll_label, fmt_cost(sym, costs["toll"]))
     row("Fuel stations found", str(len(pois.get("fuel", []))))
     row("EV chargers found", str(len(pois.get("ev", []))))
     row("Hotels found", str(len(pois.get("hotels", []))))
