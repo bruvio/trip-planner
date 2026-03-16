@@ -1,0 +1,53 @@
+name: Semantic Release
+
+on:
+  workflow_call:
+    secrets:
+      GH_TOKEN:
+        required: true
+    outputs:
+      release_tag:
+        value: ${{ jobs.release.outputs.release_tag }}
+
+jobs:
+  release:
+    name: Semantic Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      release_tag: ${{ steps.capture_tag.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure git for PAT-based push
+        run: |
+          git remote set-url origin https://bruvio:${{ secrets.GH_TOKEN }}@github.com/${{ github.repository }}.git
+
+      - name: Run Semantic Release
+        run: npx semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          GIT_AUTHOR_NAME: bruvio
+          GIT_AUTHOR_EMAIL: bruno.viola@pm.me
+          GIT_COMMITTER_NAME: bruvio
+          GIT_COMMITTER_EMAIL: bruno.viola@pm.me
+
+      - name: Capture Tag
+        id: capture_tag
+        run: |
+          RELEASE_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "none")
+          echo "release_tag=${RELEASE_TAG}" >> $GITHUB_OUTPUT

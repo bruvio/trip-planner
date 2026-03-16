@@ -1,0 +1,37 @@
+name: Lint & Test
+
+on:
+  workflow_call:
+
+jobs:
+  ruff-lint:
+    name: Python Lint & Format Check (Ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install ruff
+        run: pip install ruff
+      - name: Ruff lint check
+        run: make lint
+      - name: Ruff format check
+        run: make format-check
+
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install test dependencies
+        run: pip install pytest pytest-cov
+      - name: Syntax check
+        run: make check
+      - name: Run tests
+        run: make test

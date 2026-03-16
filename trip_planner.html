@@ -1,0 +1,1017 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Road Trip Planner</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    :root {
+      --bg:       #07090f;
+      --surface:  #0e1220;
+      --card:     #131929;
+      --border:   #1e2840;
+      --amber:    #f59e0b;
+      --amber-dim:#7c4f06;
+      --green:    #10b981;
+      --blue:     #3b82f6;
+      --red:      #ef4444;
+      --text:     #dde3f0;
+      --muted:    #5a6480;
+      --font-ui:  'IBM Plex Mono', monospace;
+      --font-hd:  'Cormorant Garamond', serif;
+      --sidebar:  360px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: var(--font-ui); font-size: 13px; }
+
+    /* ── Layout ── */
+    #app { display: grid; grid-template-columns: var(--sidebar) 1fr; grid-template-rows: 100vh; height: 100vh; }
+    #sidebar { background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; z-index: 1000; }
+    #map-wrap { position: relative; }
+    #map { width: 100%; height: 100%; }
+
+    /* ── Sidebar Header ── */
+    #sidebar-header { padding: 20px 20px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    #sidebar-header h1 { font-family: var(--font-hd); font-size: 22px; font-weight: 600; color: var(--amber); letter-spacing: 0.02em; line-height: 1; }
+    #sidebar-header p { font-size: 10px; color: var(--muted); margin-top: 4px; letter-spacing: 0.08em; text-transform: uppercase; }
+
+    /* ── Scrollable content ── */
+    #sidebar-body { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+    #sidebar-body::-webkit-scrollbar { width: 4px; }
+    #sidebar-body::-webkit-scrollbar-track { background: transparent; }
+    #sidebar-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* ── Section blocks ── */
+    .section { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 14px; }
+    .section-label { font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+
+    /* ── Inputs ── */
+    .wp-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; position: relative; }
+    .wp-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .dot-start { background: var(--green); }
+    .dot-end   { background: var(--red); }
+    .dot-stop  { background: var(--amber); border: 2px solid var(--amber); }
+    .wp-input  { flex: 1; background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 7px 10px; border-radius: 4px; font-family: var(--font-ui); font-size: 12px; outline: none; transition: border-color .15s; }
+    .wp-input:focus { border-color: var(--amber); }
+    .wp-input::placeholder { color: var(--muted); }
+    .btn-remove { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 4px; transition: color .15s; }
+    .btn-remove:hover { color: var(--red); }
+
+    /* ── Autocomplete dropdown ── */
+    .autocomplete-list { position: absolute; top: 100%; left: 16px; right: 0; background: var(--card); border: 1px solid var(--amber); border-radius: 4px; z-index: 9999; max-height: 180px; overflow-y: auto; }
+    .autocomplete-item { padding: 8px 10px; cursor: pointer; font-size: 11px; line-height: 1.4; border-bottom: 1px solid var(--border); transition: background .1s; }
+    .autocomplete-item:last-child { border-bottom: none; }
+    .autocomplete-item:hover { background: var(--border); }
+    .autocomplete-item small { display: block; color: var(--muted); font-size: 10px; }
+
+    /* ── Add stop button ── */
+    #btn-add-stop { width: 100%; background: none; border: 1px dashed var(--border); color: var(--muted); padding: 7px; border-radius: 4px; cursor: pointer; font-family: var(--font-ui); font-size: 11px; letter-spacing: 0.05em; transition: all .15s; }
+    #btn-add-stop:hover { border-color: var(--amber); color: var(--amber); }
+
+    /* ── Vehicle config ── */
+    .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field label { font-size: 9px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+    .field select, .field input[type="number"], .field input[type="text"] {
+      background: var(--surface); border: 1px solid var(--border); color: var(--text);
+      padding: 6px 8px; border-radius: 4px; font-family: var(--font-ui); font-size: 12px; outline: none;
+      transition: border-color .15s; width: 100%;
+    }
+    .field select:focus, .field input:focus { border-color: var(--amber); }
+    .field select option { background: var(--card); }
+
+    /* ── Toggles ── */
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 4px 0; }
+    .toggle-row span { font-size: 11px; color: var(--text); display: flex; align-items: center; gap: 6px; }
+    .toggle-row .icon { font-size: 13px; }
+    .toggle { position: relative; width: 34px; height: 18px; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider { position: absolute; inset: 0; background: var(--border); border-radius: 9px; cursor: pointer; transition: .2s; }
+    .toggle-slider::before { content: ''; position: absolute; width: 12px; height: 12px; left: 3px; top: 3px; background: var(--muted); border-radius: 50%; transition: .2s; }
+    .toggle input:checked + .toggle-slider { background: var(--amber-dim); }
+    .toggle input:checked + .toggle-slider::before { transform: translateX(16px); background: var(--amber); }
+
+    /* ── Buttons ── */
+    #btn-plan { width: 100%; background: var(--amber); color: #000; border: none; padding: 11px; border-radius: 4px; font-family: var(--font-ui); font-size: 12px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; transition: all .15s; margin-top: 4px; }
+    #btn-plan:hover { background: #fbbf24; }
+    #btn-plan:disabled { background: var(--amber-dim); color: var(--muted); cursor: not-allowed; }
+    #btn-export { width: 100%; background: none; border: 1px solid var(--border); color: var(--muted); padding: 8px; border-radius: 4px; font-family: var(--font-ui); font-size: 11px; letter-spacing: 0.06em; cursor: pointer; transition: all .15s; }
+    #btn-export:hover:not(:disabled) { border-color: var(--green); color: var(--green); }
+    #btn-export:disabled { cursor: not-allowed; opacity: 0.4; }
+
+    /* ── Results ── */
+    #results { display: none; flex-direction: column; gap: 10px; }
+    .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; }
+    .stat-label { font-size: 9px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+    .stat-value { font-size: 16px; color: var(--amber); margin-top: 2px; font-weight: 500; }
+    .stat-sub { font-size: 10px; color: var(--muted); margin-top: 1px; }
+
+    /* ── Cost table ── */
+    .cost-table { width: 100%; border-collapse: collapse; }
+    .cost-table tr { border-bottom: 1px solid var(--border); }
+    .cost-table td { padding: 6px 0; font-size: 11px; }
+    .cost-table td:last-child { text-align: right; color: var(--amber); }
+    .cost-table .total td { color: var(--text); font-weight: 500; border-top: 1px solid var(--amber); border-bottom: none; }
+    .cost-table .total td:last-child { color: var(--amber); }
+
+    /* ── POI tabs ── */
+    .tabs { display: flex; gap: 2px; background: var(--surface); border-radius: 4px; padding: 2px; }
+    .tab { flex: 1; padding: 5px; text-align: center; border-radius: 3px; cursor: pointer; font-size: 10px; letter-spacing: 0.05em; color: var(--muted); transition: all .15s; border: none; background: none; font-family: var(--font-ui); }
+    .tab.active { background: var(--border); color: var(--text); }
+    .tab-content { display: none; max-height: 200px; overflow-y: auto; }
+    .tab-content.active { display: block; }
+    .tab-content::-webkit-scrollbar { width: 3px; }
+    .tab-content::-webkit-scrollbar-thumb { background: var(--border); }
+
+    /* ── POI items ── */
+    .poi-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); cursor: pointer; transition: background .1s; }
+    .poi-item:last-child { border-bottom: none; }
+    .poi-item:hover { color: var(--amber); }
+    .poi-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+    .poi-name { font-size: 11px; font-weight: 500; }
+    .poi-detail { font-size: 10px; color: var(--muted); margin-top: 2px; }
+    .poi-dist { font-size: 10px; color: var(--amber); margin-left: auto; flex-shrink: 0; white-space: nowrap; padding-left: 6px; }
+    .poi-empty { font-size: 11px; color: var(--muted); padding: 16px 0; text-align: center; }
+
+    /* ── Status ── */
+    #status { font-size: 11px; color: var(--muted); padding: 8px 10px; background: var(--card); border-radius: 4px; display: none; }
+    #status.loading { color: var(--amber); display: block; }
+    #status.error { color: var(--red); display: block; }
+
+    /* ── Map overlay ── */
+    #map-legend { position: absolute; bottom: 20px; right: 10px; background: rgba(14,18,32,0.9); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; z-index: 500; display: none; }
+    #map-legend.visible { display: block; }
+    .legend-item { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text); margin-bottom: 4px; }
+    .legend-item:last-child { margin-bottom: 0; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+    /* ── Leaflet overrides ── */
+    .leaflet-container { background: #0a0d15; font-family: var(--font-ui); }
+    .leaflet-tile { filter: brightness(0.85) saturate(0.7) hue-rotate(5deg); }
+    .leaflet-popup-content-wrapper { background: var(--card); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 20px rgba(0,0,0,.5); color: var(--text); font-family: var(--font-ui); font-size: 12px; }
+    .leaflet-popup-tip { background: var(--card); }
+    .leaflet-popup-content { margin: 10px 14px; line-height: 1.5; }
+    .leaflet-popup-content b { color: var(--amber); }
+    .leaflet-control-zoom a { background: var(--card) !important; color: var(--text) !important; border-color: var(--border) !important; }
+    .leaflet-control-attribution { background: rgba(14,18,32,0.8) !important; color: var(--muted) !important; font-size: 9px !important; }
+    .leaflet-control-attribution a { color: var(--muted) !important; }
+
+    /* ── Spinner ── */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--border); border-top-color: var(--amber); border-radius: 50%; animation: spin .7s linear infinite; margin-right: 6px; vertical-align: middle; }
+
+    /* ── Toll input ── */
+    .toll-row { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
+    .toll-row span { font-size: 11px; color: var(--muted); }
+    .toll-input { background: var(--surface); border: 1px solid var(--border); color: var(--amber); padding: 4px 8px; border-radius: 4px; font-family: var(--font-ui); font-size: 12px; width: 80px; text-align: right; outline: none; }
+    .toll-input:focus { border-color: var(--amber); }
+  </style>
+</head>
+<body>
+<div id="app">
+  <!-- ─── SIDEBAR ─── -->
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <h1>Road Trip Planner</h1>
+      <p>Open-source routing · Real-time POIs</p>
+    </div>
+
+    <div id="sidebar-body">
+
+      <!-- Waypoints -->
+      <div class="section">
+        <div class="section-label">Route</div>
+        <div id="waypoints-container">
+          <div class="wp-row" data-index="0">
+            <span class="wp-dot dot-start"></span>
+            <input class="wp-input" type="text" placeholder="Start — e.g. Oxford, UK" autocomplete="off">
+            <div class="autocomplete-list" style="display:none"></div>
+          </div>
+          <div class="wp-row" data-index="1">
+            <span class="wp-dot dot-end"></span>
+            <input class="wp-input" type="text" placeholder="Destination" autocomplete="off">
+            <div class="autocomplete-list" style="display:none"></div>
+          </div>
+        </div>
+        <button id="btn-add-stop">+ Add stop or re-route via town</button>
+      </div>
+
+      <!-- Vehicle -->
+      <div class="section">
+        <div class="section-label">Vehicle</div>
+        <div class="config-grid">
+          <div class="field">
+            <label>Fuel Type</label>
+            <select id="fuel-type">
+              <option value="petrol">Petrol</option>
+              <option value="diesel" selected>Diesel</option>
+              <option value="electric">Electric</option>
+              <option value="hybrid">Hybrid</option>
+            </select>
+          </div>
+          <div class="field" id="field-efficiency">
+            <label id="efficiency-label">L/100km</label>
+            <input type="number" id="efficiency" value="6.5" min="1" max="50" step="0.5">
+          </div>
+          <div class="field" id="field-tank">
+            <label>Tank Size (L)</label>
+            <input type="number" id="tank-size" value="60" min="10" max="150">
+          </div>
+          <div class="field">
+            <label>Currency</label>
+            <select id="currency">
+              <option value="GBP">£ GBP</option>
+              <option value="EUR">€ EUR</option>
+              <option value="USD">$ USD</option>
+            </select>
+          </div>
+        </div>
+        <div class="config-grid" style="margin-top:8px">
+          <div class="field">
+            <label id="fuel-price-label">Fuel Price /L</label>
+            <input type="number" id="fuel-price" value="1.45" min="0.1" max="5" step="0.01">
+          </div>
+          <div class="field" id="field-kwh" style="display:none">
+            <label>kWh / 100km</label>
+            <input type="number" id="kwh-per-100km" value="18" min="5" max="50">
+          </div>
+          <div class="field" id="field-kwh-price" style="display:none">
+            <label>kWh Price</label>
+            <input type="number" id="kwh-price" value="0.35" min="0.01" max="2" step="0.01">
+          </div>
+        </div>
+        <div class="toll-row">
+          <span>Manual toll cost</span>
+          <input type="number" class="toll-input" id="manual-toll" value="0" min="0">
+        </div>
+      </div>
+
+      <!-- Options -->
+      <div class="section">
+        <div class="section-label">Show on Map</div>
+        <div class="toggle-row"><span><span class="icon">⛽</span> Fuel Stations</span>
+          <label class="toggle"><input type="checkbox" id="show-fuel" checked><span class="toggle-slider"></span></label>
+        </div>
+        <div class="toggle-row"><span><span class="icon">⚡</span> EV Charging</span>
+          <label class="toggle"><input type="checkbox" id="show-ev" checked><span class="toggle-slider"></span></label>
+        </div>
+        <div class="toggle-row"><span><span class="icon">🏨</span> Hotels</span>
+          <label class="toggle"><input type="checkbox" id="show-hotels" checked><span class="toggle-slider"></span></label>
+        </div>
+        <div class="toggle-row"><span><span class="icon">🅿️</span> Rest Areas</span>
+          <label class="toggle"><input type="checkbox" id="show-rest" checked><span class="toggle-slider"></span></label>
+        </div>
+      </div>
+
+      <div id="status"></div>
+
+      <button id="btn-plan">▶ Plan Route</button>
+
+      <!-- Results (hidden until planned) -->
+      <div id="results">
+
+        <!-- Summary stats -->
+        <div class="section">
+          <div class="section-label">Journey Summary</div>
+          <div class="stat-grid">
+            <div class="stat">
+              <div class="stat-label">Distance</div>
+              <div class="stat-value" id="stat-dist">—</div>
+              <div class="stat-sub" id="stat-dist-sub"></div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Drive Time</div>
+              <div class="stat-value" id="stat-time">—</div>
+              <div class="stat-sub" id="stat-time-sub"></div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Fuel Stops</div>
+              <div class="stat-value" id="stat-refills">—</div>
+              <div class="stat-sub" id="stat-refills-sub"></div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Total Cost</div>
+              <div class="stat-value" id="stat-total">—</div>
+              <div class="stat-sub">estimate</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Cost breakdown -->
+        <div class="section">
+          <div class="section-label">Cost Breakdown</div>
+          <table class="cost-table">
+            <tr><td id="cost-fuel-label">⛽ Fuel</td><td id="cost-fuel">—</td></tr>
+            <tr id="row-ev-cost" style="display:none"><td>⚡ Charging</td><td id="cost-ev">—</td></tr>
+            <tr><td>🛣️ Tolls (manual)</td><td id="cost-toll">—</td></tr>
+            <tr class="total"><td><strong>Total</strong></td><td id="cost-total-row"><strong>—</strong></td></tr>
+          </table>
+        </div>
+
+        <!-- POIs -->
+        <div class="section">
+          <div class="section-label">Points of Interest</div>
+          <div class="tabs">
+            <button class="tab active" data-tab="fuel">⛽ Fuel</button>
+            <button class="tab" data-tab="ev">⚡ EV</button>
+            <button class="tab" data-tab="hotels">🏨 Hotels</button>
+            <button class="tab" data-tab="rest">🅿️ Rest</button>
+          </div>
+          <div class="tab-content active" id="tab-fuel"><div class="poi-empty">Plan route to load</div></div>
+          <div class="tab-content" id="tab-ev"><div class="poi-empty">Plan route to load</div></div>
+          <div class="tab-content" id="tab-hotels"><div class="poi-empty">Plan route to load</div></div>
+          <div class="tab-content" id="tab-rest"><div class="poi-empty">Plan route to load</div></div>
+        </div>
+
+        <button id="btn-export" disabled>↓ Export Markdown Report</button>
+      </div>
+
+    </div><!-- /sidebar-body -->
+  </div><!-- /sidebar -->
+
+  <!-- ─── MAP ─── -->
+  <div id="map-wrap">
+    <div id="map"></div>
+    <div id="map-legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#10b981"></div> Start</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#ef4444"></div> End</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div> Stop</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#6b7280"></div> Fuel Station</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#3b82f6"></div> EV Charger</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#8b5cf6"></div> Hotel</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#78716c"></div> Rest Area</div>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+'use strict';
+
+// ═══════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════
+const state = {
+  waypoints: [null, null],   // [{lat,lon,display_name}, ...]
+  route: null,
+  pois: { fuel: [], ev: [], hotels: [], rest: [] },
+  stopCount: 0,
+};
+
+// ═══════════════════════════════════════════════════════════
+// MAP INIT
+// ═══════════════════════════════════════════════════════════
+const map = L.map('map', { zoomControl: true }).setView([51.5, 10], 5);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>',
+  subdomains: 'abcd',
+  maxZoom: 20
+}).addTo(map);
+
+const layers = { route: null, markers: L.layerGroup().addTo(map) };
+
+function mkIcon(color, emoji) {
+  return L.divIcon({
+    html: `<div style="background:${color};width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;border:2px solid rgba(255,255,255,.3);box-shadow:0 2px 6px rgba(0,0,0,.4)">${emoji}</div>`,
+    className: '', iconSize: [28, 28], iconAnchor: [14, 14], popupAnchor: [0, -14]
+  });
+}
+const icons = {
+  start:  mkIcon('#10b981', '▶'),
+  end:    mkIcon('#ef4444', '⬛'),
+  stop:   mkIcon('#f59e0b', '◆'),
+  fuel:   mkIcon('#6b7280', '⛽'),
+  ev:     mkIcon('#3b82f6', '⚡'),
+  hotel:  mkIcon('#8b5cf6', '🏨'),
+  rest:   mkIcon('#78716c', '🅿️'),
+};
+
+// ═══════════════════════════════════════════════════════════
+// NOMINATIM GEOCODING
+// ═══════════════════════════════════════════════════════════
+const geocodeCache = {};
+let lastGeocodeTime = 0;
+
+async function geocodeSearch(q) {
+  if (geocodeCache[q]) return geocodeCache[q];
+  const now = Date.now();
+  if (now - lastGeocodeTime < 1100) await sleep(1100 - (now - lastGeocodeTime));
+  lastGeocodeTime = Date.now();
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&addressdetails=1`;
+  const r = await fetch(url, { headers: { 'Accept-Language': 'en' } });
+  const data = await r.json();
+  geocodeCache[q] = data;
+  return data;
+}
+
+// ═══════════════════════════════════════════════════════════
+// OSRM ROUTING
+// ═══════════════════════════════════════════════════════════
+async function planRoute(points) {
+  const coords = points.map(p => `${p.lon},${p.lat}`).join(';');
+  const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=false`;
+  const r = await fetch(url);
+  const data = await r.json();
+  if (data.code !== 'Ok') throw new Error('Routing failed: ' + data.message);
+  return data.routes[0];
+}
+
+// ═══════════════════════════════════════════════════════════
+// OVERPASS POI QUERY (around filter)
+// ═══════════════════════════════════════════════════════════
+function simplifyPolyline(coords, maxPts = 100) {
+  if (coords.length <= maxPts) return coords;
+  const step = (coords.length - 1) / (maxPts - 1);
+  return Array.from({ length: maxPts }, (_, i) => coords[Math.round(i * step)]);
+}
+
+function polyStr(coords) {
+  // coords are [lon, lat] GeoJSON order -> Overpass needs lat,lon
+  return coords.map(c => `${c[1]},${c[0]}`).join(',');
+}
+
+async function overpassAroundQuery(routeCoords, tagFilters, radius) {
+  const simplified = simplifyPolyline(routeCoords, 80);
+  const poly = polyStr(simplified);
+  const parts = tagFilters.map(tf => `${tf}(around:${radius},${poly});`).join('');
+  const body = `[out:json][timeout:60];(${parts});out center 200;`;
+  const r = await fetch('https://overpass-api.de/api/interpreter', {
+    method: 'POST',
+    body: 'data=' + encodeURIComponent(body)
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const data = await r.json();
+  return data.elements || [];
+}
+
+function routeBBox(geojson, pad = 0.3) {
+  const coords = geojson.geometry.coordinates;
+  let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+  for (const [lon, lat] of coords) {
+    if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat;
+    if (lon < minLon) minLon = lon; if (lon > maxLon) maxLon = lon;
+  }
+  return [minLat - pad, minLon - pad, maxLat + pad, maxLon + pad];
+}
+
+function elemName(el) {
+  return el.tags?.name || el.tags?.operator || el.tags?.brand || 'Unnamed';
+}
+
+function elemCenter(el) {
+  if (el.type === 'node') return { lat: el.lat, lon: el.lon };
+  return { lat: el.center?.lat, lon: el.center?.lon };
+}
+
+function distKm(lat1, lon1, lat2, lon2) {
+  const R = 6371, dLat = (lat2-lat1)*Math.PI/180, dLon = (lon2-lon1)*Math.PI/180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+function nearestPointOnRoute(routeCoords, lat, lon) {
+  let minD = Infinity;
+  for (const [rlon, rlat] of routeCoords) {
+    const d = distKm(lat, lon, rlat, rlon);
+    if (d < minD) minD = d;
+  }
+  return minD;
+}
+
+// ═══════════════════════════════════════════════════════════
+// COST CALCULATIONS
+// ═══════════════════════════════════════════════════════════
+function calcCosts(distKm) {
+  const fuelType  = document.getElementById('fuel-type').value;
+  const currency  = document.getElementById('currency').value;
+  const toll      = parseFloat(document.getElementById('manual-toll').value) || 0;
+  const symbols   = { GBP: '£', EUR: '€', USD: '$' };
+  const sym       = symbols[currency];
+
+  let fuelCost = 0, evCost = 0, refills = 0;
+
+  if (fuelType === 'electric') {
+    const kwhPer100 = parseFloat(document.getElementById('kwh-per-100km').value) || 18;
+    const kwhPrice  = parseFloat(document.getElementById('kwh-price').value) || 0.35;
+    evCost = (distKm / 100) * kwhPer100 * kwhPrice;
+  } else {
+    const lPer100   = parseFloat(document.getElementById('efficiency').value) || 6.5;
+    const fuelPrice = parseFloat(document.getElementById('fuel-price').value) || 1.45;
+    const tank      = parseFloat(document.getElementById('tank-size').value) || 60;
+    const totalL    = (distKm / 100) * lPer100;
+    fuelCost = totalL * fuelPrice;
+    const range = (tank / lPer100) * 100;
+    refills = Math.max(0, Math.ceil(distKm / range) - 1);
+  }
+
+  const total = fuelCost + evCost + toll;
+  return { fuelCost, evCost, toll, total, refills, sym };
+}
+
+// ═══════════════════════════════════════════════════════════
+// UI HELPERS
+// ═══════════════════════════════════════════════════════════
+function setStatus(msg, type = 'loading') {
+  const el = document.getElementById('status');
+  el.innerHTML = type === 'loading' ? `<span class="spinner"></span>${msg}` : msg;
+  el.className = type;
+}
+function clearStatus() { document.getElementById('status').className = ''; document.getElementById('status').style.display = 'none'; }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function fmt(n, d = 1) { return n >= 1000 ? (n/1000).toFixed(d) + 'k' : n.toFixed(d); }
+function fmtDist(m) { return m >= 1000 ? (m/1000).toFixed(0) + ' km' : m.toFixed(0) + ' m'; }
+function fmtTime(s) {
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+// ═══════════════════════════════════════════════════════════
+// AUTOCOMPLETE
+// ═══════════════════════════════════════════════════════════
+let debounceTimer = null;
+
+function attachAutocomplete(row, index) {
+  const input = row.querySelector('.wp-input');
+  const list  = row.querySelector('.autocomplete-list');
+
+  input.addEventListener('input', () => {
+    clearTimeout(debounceTimer);
+    const q = input.value.trim();
+    if (q.length < 3) { list.style.display = 'none'; return; }
+    debounceTimer = setTimeout(async () => {
+      try {
+        const results = await geocodeSearch(q);
+        if (!results.length) { list.style.display = 'none'; return; }
+        list.innerHTML = results.slice(0, 5).map((r, i) =>
+          `<div class="autocomplete-item" data-i="${i}" data-lat="${r.lat}" data-lon="${r.lon}" data-name="${encodeURIComponent(r.display_name)}">
+            ${r.display_name.split(',')[0]}
+            <small>${r.display_name.split(',').slice(1, 3).join(',').trim()}</small>
+          </div>`
+        ).join('');
+        list.style.display = 'block';
+        list.querySelectorAll('.autocomplete-item').forEach(item => {
+          item.addEventListener('mousedown', e => {
+            e.preventDefault();
+            const lat = parseFloat(item.dataset.lat);
+            const lon = parseFloat(item.dataset.lon);
+            const name = decodeURIComponent(item.dataset.name);
+            input.value = name.split(',').slice(0, 2).join(',').trim();
+            state.waypoints[index] = { lat, lon, display_name: name };
+            list.style.display = 'none';
+          });
+        });
+      } catch {}
+    }, 500);
+  });
+
+  input.addEventListener('blur', () => setTimeout(() => { list.style.display = 'none'; }, 200));
+}
+
+// ═══════════════════════════════════════════════════════════
+// WAYPOINT MANAGEMENT
+// ═══════════════════════════════════════════════════════════
+function getWpRows() { return document.querySelectorAll('#waypoints-container .wp-row'); }
+
+function addStop() {
+  const container = document.getElementById('waypoints-container');
+  const rows = getWpRows();
+  const insertBefore = rows[rows.length - 1]; // before destination
+  const idx = rows.length - 1;
+
+  state.waypoints.splice(idx, 0, null);
+
+  const row = document.createElement('div');
+  row.className = 'wp-row';
+  row.dataset.index = idx;
+  row.innerHTML = `
+    <span class="wp-dot dot-stop"></span>
+    <input class="wp-input" type="text" placeholder="Via — town or village" autocomplete="off">
+    <div class="autocomplete-list" style="display:none"></div>
+    <button class="btn-remove" title="Remove">×</button>
+  `;
+  container.insertBefore(row, insertBefore);
+  rebuildIndices();
+  attachAutocomplete(row, idx);
+
+  row.querySelector('.btn-remove').addEventListener('click', () => {
+    const i = parseInt(row.dataset.index);
+    state.waypoints.splice(i, 1);
+    row.remove();
+    rebuildIndices();
+  });
+}
+
+function rebuildIndices() {
+  getWpRows().forEach((row, i) => {
+    row.dataset.index = i;
+    const existing = row.querySelector('.autocomplete-list');
+    if (existing) existing.remove();
+    const newList = document.createElement('div');
+    newList.className = 'autocomplete-list';
+    newList.style.display = 'none';
+    row.querySelector('.wp-input').insertAdjacentElement('afterend', newList);
+  });
+  // Resize waypoints array
+  while (state.waypoints.length < getWpRows().length) state.waypoints.push(null);
+}
+
+// Initial autocomplete
+getWpRows().forEach((row, i) => attachAutocomplete(row, i));
+document.getElementById('btn-add-stop').addEventListener('click', addStop);
+
+// ═══════════════════════════════════════════════════════════
+// TABS
+// ═══════════════════════════════════════════════════════════
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('tab-' + tab.dataset.tab)?.classList.add('active');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// FUEL TYPE CHANGE
+// ═══════════════════════════════════════════════════════════
+document.getElementById('fuel-type').addEventListener('change', e => {
+  const isEV = e.target.value === 'electric';
+  document.getElementById('field-efficiency').style.display = isEV ? 'none' : '';
+  document.getElementById('field-tank').style.display = isEV ? 'none' : '';
+  document.getElementById('field-kwh').style.display = isEV ? '' : 'none';
+  document.getElementById('field-kwh-price').style.display = isEV ? '' : 'none';
+  document.getElementById('fuel-price-label').textContent = 'Fuel Price /L';
+  document.getElementById('row-ev-cost').style.display = isEV ? '' : 'none';
+});
+
+// ═══════════════════════════════════════════════════════════
+// RENDER POIs
+// ═══════════════════════════════════════════════════════════
+function renderPOIs(type, elements, iconKey, tabId, getDetail) {
+  const tab = document.getElementById(tabId);
+  layers.markers.clearLayers();
+
+  if (!elements.length) {
+    tab.innerHTML = '<div class="poi-empty">None found along this route</div>';
+    return;
+  }
+
+  const showToggle = document.getElementById(`show-${type === 'rest' ? 'rest' : type === 'hotels' ? 'hotels' : type}`);
+
+  tab.innerHTML = elements.slice(0, 30).map((el, i) => {
+    const c = elemCenter(el);
+    const nm = elemName(el);
+    const detail = getDetail(el);
+    return `<div class="poi-item" data-i="${i}">
+      <span class="poi-icon">${icons[iconKey] ? '' : ''}</span>
+      <div>
+        <div class="poi-name">${nm}</div>
+        <div class="poi-detail">${detail}</div>
+      </div>
+      <span class="poi-dist">${el._routeDist !== undefined ? el._routeDist.toFixed(1) + 'km' : ''}</span>
+    </div>`;
+  }).join('');
+
+  tab.querySelectorAll('.poi-item').forEach((item, i) => {
+    item.addEventListener('click', () => {
+      const el = elements[i];
+      const c = elemCenter(el);
+      if (c?.lat && c?.lon) map.setView([c.lat, c.lon], 16);
+    });
+  });
+}
+
+function addPOIMarkers(elements, iconKey) {
+  const toggle = {
+    fuel: document.getElementById('show-fuel'),
+    ev: document.getElementById('show-ev'),
+    hotel: document.getElementById('show-hotels'),
+    rest: document.getElementById('show-rest'),
+  };
+  if (!toggle[iconKey]?.checked) return;
+
+  elements.slice(0, 50).forEach(el => {
+    const c = elemCenter(el);
+    if (!c?.lat || !c?.lon) return;
+    const nm = elemName(el);
+    L.marker([c.lat, c.lon], { icon: icons[iconKey] })
+      .bindPopup(`<b>${nm}</b><br><small>${buildPopupDetail(el, iconKey)}</small>`)
+      .addTo(layers.markers);
+  });
+}
+
+function buildPopupDetail(el, type) {
+  const t = el.tags || {};
+  const lines = [];
+  if (t['addr:street']) lines.push(t['addr:street'] + (t['addr:housenumber'] ? ' ' + t['addr:housenumber'] : ''));
+  if (t['addr:city']) lines.push(t['addr:city']);
+  if (t.opening_hours) lines.push('Hours: ' + t.opening_hours.replace('Mo-Su', 'Daily'));
+  if (t.phone) lines.push('📞 ' + t.phone);
+  if (type === 'fuel') {
+    if (t['fuel:diesel']) lines.push('✓ Diesel');
+    if (t['fuel:octane_95']) lines.push('✓ Petrol');
+    if (t['fuel:lpg']) lines.push('✓ LPG');
+  }
+  if (type === 'ev') {
+    if (t['socket:type2']) lines.push('⚡ Type 2');
+    if (t['socket:chademo']) lines.push('⚡ CHAdeMO');
+    if (t['socket:type2_combo']) lines.push('⚡ CCS');
+    if (t.capacity) lines.push('Capacity: ' + t.capacity);
+  }
+  if (type === 'hotel') {
+    if (t.stars) lines.push('★'.repeat(parseInt(t.stars)));
+    if (t.rooms) lines.push(t.rooms + ' rooms');
+  }
+  return lines.join('<br>') || 'No details';
+}
+
+// ═══════════════════════════════════════════════════════════
+// MAIN PLAN ROUTE
+// ═══════════════════════════════════════════════════════════
+document.getElementById('btn-plan').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-plan');
+  btn.disabled = true;
+
+  // Validate waypoints
+  const rows = getWpRows();
+  const resolvedWPs = [];
+
+  setStatus('Geocoding locations…');
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const input = row.querySelector('.wp-input');
+    const val = input.value.trim();
+    if (!val) {
+      if (i === 0 || i === rows.length - 1) {
+        setStatus('Please enter start and destination.', 'error');
+        btn.disabled = false; return;
+      }
+      continue;
+    }
+    if (state.waypoints[i] && input.value.includes(state.waypoints[i].display_name?.split(',')[0])) {
+      resolvedWPs.push(state.waypoints[i]);
+    } else {
+      // Try to geocode
+      try {
+        const results = await geocodeSearch(val);
+        if (!results.length) {
+          setStatus(`Could not find: "${val}"`, 'error');
+          btn.disabled = false; return;
+        }
+        const r = results[0];
+        resolvedWPs.push({ lat: parseFloat(r.lat), lon: parseFloat(r.lon), display_name: r.display_name });
+        input.value = r.display_name.split(',').slice(0, 2).join(',').trim();
+      } catch (e) {
+        setStatus('Geocoding error: ' + e.message, 'error');
+        btn.disabled = false; return;
+      }
+    }
+  }
+
+  if (resolvedWPs.length < 2) {
+    setStatus('Need at least start and destination.', 'error');
+    btn.disabled = false; return;
+  }
+
+  // Route
+  setStatus('Calculating route…');
+  let route;
+  try {
+    route = await planRoute(resolvedWPs);
+  } catch (e) {
+    setStatus('Routing error: ' + e.message, 'error');
+    btn.disabled = false; return;
+  }
+
+  state.route = route;
+  state.waypoints = resolvedWPs;
+
+  // Draw route
+  if (layers.route) map.removeLayer(layers.route);
+  layers.markers.clearLayers();
+
+  layers.route = L.geoJSON(route.geometry, {
+    style: { color: '#f59e0b', weight: 4, opacity: 0.9 }
+  }).addTo(map);
+
+  // Waypoint markers
+  resolvedWPs.forEach((wp, i) => {
+    const iconKey = i === 0 ? 'start' : i === resolvedWPs.length - 1 ? 'end' : 'stop';
+    L.marker([wp.lat, wp.lon], { icon: icons[iconKey] })
+      .bindPopup(`<b>${wp.display_name.split(',').slice(0, 2).join(', ')}</b>`)
+      .addTo(layers.markers);
+  });
+
+  map.fitBounds(layers.route.getBounds(), { padding: [30, 30] });
+  document.getElementById('map-legend').classList.add('visible');
+
+  // Stats
+  const distM = route.distance;
+  const distKmVal = distM / 1000;
+  const durationS = route.duration;
+
+  document.getElementById('stat-dist').textContent = fmtDist(distM);
+  document.getElementById('stat-dist-sub').textContent = `≈ ${(distM / 1609.34).toFixed(0)} miles`;
+  document.getElementById('stat-time').textContent = fmtTime(durationS);
+  document.getElementById('stat-time-sub').textContent = 'without stops';
+
+  const costs = calcCosts(distKmVal);
+  document.getElementById('stat-refills').textContent = costs.refills > 0 ? costs.refills : '—';
+  document.getElementById('stat-refills-sub').textContent = costs.refills > 0 ? 'estimated' : 'no stops needed';
+  document.getElementById('stat-total').textContent = costs.sym + costs.total.toFixed(2);
+
+  const fuelType = document.getElementById('fuel-type').value;
+  document.getElementById('cost-fuel-label').textContent = fuelType === 'electric' ? '⛽ Base fuel' : '⛽ Fuel';
+  document.getElementById('cost-fuel').textContent = fuelType === 'electric' ? '—' : costs.sym + costs.fuelCost.toFixed(2);
+  document.getElementById('cost-ev').textContent = costs.sym + costs.evCost.toFixed(2);
+  document.getElementById('cost-toll').textContent = costs.sym + costs.toll.toFixed(2);
+  document.getElementById('cost-total-row').innerHTML = `<strong>${costs.sym + costs.total.toFixed(2)}</strong>`;
+
+  // Show results
+  document.getElementById('results').style.display = 'flex';
+
+  // POIs (using around filter for accurate route-proximity results)
+  const routeCoords = route.geometry.coordinates;
+
+  setStatus('Loading fuel stations…');
+  try {
+    const fuelEls = await overpassAroundQuery(routeCoords,
+      ['node["amenity"="fuel"]', 'way["amenity"="fuel"]'], 5000);
+    const filtered = fuelEls
+      .map(el => { const c = elemCenter(el); el._routeDist = c ? nearestPointOnRoute(routeCoords, c.lat, c.lon) : 999; return el; })
+      .sort((a,b) => a._routeDist - b._routeDist);
+    state.pois.fuel = filtered;
+    renderPOIs('fuel', filtered, 'fuel', 'tab-fuel', el => {
+      const t = el.tags || {};
+      const fuels = [t['fuel:diesel'] && 'Diesel', t['fuel:octane_95'] && 'Petrol', t['fuel:lpg'] && 'LPG'].filter(Boolean);
+      return fuels.join(' · ') || (t.brand || 'Fuel station');
+    });
+    addPOIMarkers(filtered, 'fuel');
+  } catch (e) { document.getElementById('tab-fuel').innerHTML = '<div class="poi-empty">Error loading fuel stations: ' + e.message + '</div>'; }
+
+  await sleep(2500);
+  setStatus('Loading EV charging…');
+  try {
+    const evEls = await overpassAroundQuery(routeCoords,
+      ['node["amenity"="charging_station"]', 'way["amenity"="charging_station"]'], 5000);
+    const filtered = evEls
+      .map(el => { const c = elemCenter(el); el._routeDist = c ? nearestPointOnRoute(routeCoords, c.lat, c.lon) : 999; return el; })
+      .sort((a,b) => a._routeDist - b._routeDist);
+    state.pois.ev = filtered;
+    renderPOIs('ev', filtered, 'ev', 'tab-ev', el => {
+      const t = el.tags || {};
+      const sockets = [t['socket:type2'] && 'Type2', t['socket:chademo'] && 'CHAdeMO', t['socket:type2_combo'] && 'CCS'].filter(Boolean);
+      return sockets.join(' · ') || (t.network || 'Charging station');
+    });
+    addPOIMarkers(filtered, 'ev');
+  } catch (e) { document.getElementById('tab-ev').innerHTML = '<div class="poi-empty">Error loading EV chargers: ' + e.message + '</div>'; }
+
+  await sleep(2500);
+  setStatus('Loading hotels…');
+  try {
+    const hotelEls = await overpassAroundQuery(routeCoords,
+      ['node["tourism"="hotel"]', 'way["tourism"="hotel"]', 'node["tourism"="motel"]', 'way["tourism"="motel"]'], 10000);
+    const filtered = hotelEls
+      .map(el => { const c = elemCenter(el); el._routeDist = c ? nearestPointOnRoute(routeCoords, c.lat, c.lon) : 999; return el; })
+      .sort((a,b) => a._routeDist - b._routeDist);
+    state.pois.hotels = filtered;
+    renderPOIs('hotels', filtered, 'hotel', 'tab-hotels', el => {
+      const t = el.tags || {};
+      const stars = t.stars ? '★'.repeat(parseInt(t.stars)) : '';
+      return stars || t.tourism || 'Hotel';
+    });
+    addPOIMarkers(filtered, 'hotel');
+  } catch (e) { document.getElementById('tab-hotels').innerHTML = '<div class="poi-empty">Error loading hotels: ' + e.message + '</div>'; }
+
+  await sleep(2500);
+  setStatus('Loading rest areas…');
+  try {
+    const restEls = await overpassAroundQuery(routeCoords,
+      ['node["highway"="rest_area"]', 'node["highway"="services"]'], 2000);
+    const filtered = restEls
+      .map(el => { const c = elemCenter(el); el._routeDist = c ? nearestPointOnRoute(routeCoords, c.lat, c.lon) : 999; return el; })
+      .sort((a,b) => a._routeDist - b._routeDist);
+    state.pois.rest = filtered;
+    renderPOIs('rest', filtered, 'rest', 'tab-rest', el => {
+      const t = el.tags || {};
+      return t.fee ? 'Fee: ' + t.fee : (t.highway === 'services' ? 'Services' : 'Rest area');
+    });
+    addPOIMarkers(filtered, 'rest');
+  } catch (e) { document.getElementById('tab-rest').innerHTML = '<div class="poi-empty">Error loading rest areas</div>'; }
+
+  clearStatus();
+  document.getElementById('btn-export').disabled = false;
+  btn.disabled = false;
+});
+
+// ═══════════════════════════════════════════════════════════
+// MARKDOWN EXPORT
+// ═══════════════════════════════════════════════════════════
+document.getElementById('btn-export').addEventListener('click', () => {
+  if (!state.route) return;
+  const route = state.route;
+  const wps = state.waypoints;
+  const costs = calcCosts(route.distance / 1000);
+  const now = new Date().toISOString().split('T')[0];
+  const fuelType = document.getElementById('fuel-type').value;
+  const currency = document.getElementById('currency').value;
+
+  const waypointNames = wps.map(w => w.display_name.split(',').slice(0, 2).join(', ').trim());
+  const title = `${waypointNames[0]} → ${waypointNames[waypointNames.length - 1]}`;
+
+  let md = `# Road Trip Report: ${title}\n`;
+  md += `**Generated:** ${now}  \n`;
+  md += `**Tool:** Road Trip Planner (OpenStreetMap / OSRM)  \n\n`;
+
+  md += `## Route\n`;
+  waypointNames.forEach((n, i) => {
+    const label = i === 0 ? '🟢 Start' : i === waypointNames.length - 1 ? '🔴 End' : `🟡 Stop ${i}`;
+    md += `- **${label}:** ${n}\n`;
+  });
+  md += `\n`;
+
+  md += `## Journey Summary\n`;
+  md += `| Metric | Value |\n|--------|-------|\n`;
+  md += `| Distance | ${fmtDist(route.distance)} (${(route.distance / 1609.34).toFixed(0)} miles) |\n`;
+  md += `| Driving Time | ${fmtTime(route.duration)} (without stops) |\n`;
+  md += `| Fuel Type | ${fuelType.charAt(0).toUpperCase() + fuelType.slice(1)} |\n`;
+  if (fuelType !== 'electric') {
+    md += `| Fuel Efficiency | ${document.getElementById('efficiency').value} L/100km |\n`;
+    md += `| Tank Size | ${document.getElementById('tank-size').value} L |\n`;
+    md += `| Estimated Fuel Stops | ${costs.refills} |\n`;
+  } else {
+    md += `| Consumption | ${document.getElementById('kwh-per-100km').value} kWh/100km |\n`;
+  }
+  md += `\n`;
+
+  md += `## Cost Estimate (${currency})\n`;
+  md += `| Item | Cost |\n|------|------|\n`;
+  if (fuelType !== 'electric') md += `| ⛽ Fuel | ${costs.sym}${costs.fuelCost.toFixed(2)} |\n`;
+  if (fuelType === 'electric' || fuelType === 'hybrid') md += `| ⚡ Charging | ${costs.sym}${costs.evCost.toFixed(2)} |\n`;
+  md += `| 🛣️ Tolls (manual entry) | ${costs.sym}${costs.toll.toFixed(2)} |\n`;
+  md += `| **Total** | **${costs.sym}${costs.total.toFixed(2)}** |\n\n`;
+  md += `> ⚠️ Costs are estimates. Fuel prices and tolls vary. Verify current prices before travel.\n\n`;
+
+  const renderPOISection = (title, pois, icon, detailFn) => {
+    md += `## ${icon} ${title}\n`;
+    if (!pois.length) { md += `_None found within 5km of route._\n\n`; return; }
+    md += `| Name | Details | Distance from Route |\n|------|---------|--------------------|\n`;
+    pois.slice(0, 20).forEach(el => {
+      const nm = elemName(el);
+      const detail = detailFn(el);
+      const dist = el._routeDist !== undefined ? el._routeDist.toFixed(1) + ' km' : '—';
+      md += `| ${nm} | ${detail} | ${dist} |\n`;
+    });
+    md += `\n`;
+  };
+
+  renderPOISection('Fuel Stations', state.pois.fuel, '⛽', el => {
+    const t = el.tags || {};
+    return [t['fuel:diesel'] && 'Diesel', t['fuel:octane_95'] && 'Petrol', t['fuel:lpg'] && 'LPG'].filter(Boolean).join(', ') || (t.brand || '—');
+  });
+  renderPOISection('EV Charging Points', state.pois.ev, '⚡', el => {
+    const t = el.tags || {};
+    return [t['socket:type2'] && 'Type2', t['socket:chademo'] && 'CHAdeMO', t['socket:type2_combo'] && 'CCS'].filter(Boolean).join(', ') || '—';
+  });
+  renderPOISection('Hotels', state.pois.hotels, '🏨', el => {
+    const t = el.tags || {};
+    return (t.stars ? '★'.repeat(parseInt(t.stars)) : '') || t.tourism || '—';
+  });
+  renderPOISection('Rest Areas', state.pois.rest, '🅿️', el => {
+    const t = el.tags || {};
+    return t.highway === 'services' ? 'Services' : 'Rest area';
+  });
+
+  md += `## Data Sources\n`;
+  md += `- Routing: [OSRM](https://project-osrm.org/) via OpenStreetMap data\n`;
+  md += `- Geocoding: [Nominatim](https://nominatim.openstreetmap.org/)\n`;
+  md += `- POIs: [OpenStreetMap Overpass API](https://overpass-api.de/)\n`;
+  md += `- Map: © OpenStreetMap contributors\n\n`;
+  md += `---\n_Report generated by Road Trip Planner_\n`;
+
+  const blob = new Blob([md], { type: 'text/markdown' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `trip-${title.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.md`;
+  a.click();
+});
+
+// ═══════════════════════════════════════════════════════════
+// MANUAL TOLL — update costs in real-time
+// ═══════════════════════════════════════════════════════════
+document.getElementById('manual-toll').addEventListener('input', () => {
+  if (!state.route) return;
+  const costs = calcCosts(state.route.distance / 1000);
+  document.getElementById('cost-toll').textContent = costs.sym + costs.toll.toFixed(2);
+  document.getElementById('cost-total-row').innerHTML = `<strong>${costs.sym + costs.total.toFixed(2)}</strong>`;
+  document.getElementById('stat-total').textContent = costs.sym + costs.total.toFixed(2);
+});
+</script>
+</body>
+</html>

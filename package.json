@@ -1,0 +1,22 @@
+{
+  "name": "trip-planner",
+  "version": "1.0.0",
+  "description": "Road trip planner CLI using OpenStreetMap",
+  "scripts": {
+    "release": "semantic-release",
+    "release:preview": "semantic-release --dry-run --no-ci"
+  },
+  "keywords": [],
+  "author": "bruvio",
+  "license": "MIT",
+  "devDependencies": {
+    "@commitlint/cli": "^20.4.4",
+    "@commitlint/config-conventional": "^20.4.4",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/commit-analyzer": "^13.0.1",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^12.0.6",
+    "@semantic-release/release-notes-generator": "^14.1.0",
+    "semantic-release": "^25.0.3"
+  }
+}

@@ -1,0 +1,40 @@
+name: CI/CD Pipeline
+
+# ┌──────────────────────────────────────────────────────────────────────┐
+# │  PR:                                                                │
+# │    lint-test ──> (done)                                             │
+# │                                                                     │
+# │  Push to master:                                                    │
+# │    lint-test ──> semver ──> (release tagged)                        │
+# └──────────────────────────────────────────────────────────────────────┘
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  # ── Stage 1: Lint & Test (all triggers) ──
+  lint-test:
+    uses: ./.github/workflows/ci-lint-test.yml
+
+  # ── Stage 2: Semantic Release (master push only) ──
+  semver:
+    if: >
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/master' &&
+      !contains(github.event.head_commit.message, '[skip ci]')
+    needs: [lint-test]
+    uses: ./.github/workflows/ci-semver.yml
+    secrets:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
