@@ -113,9 +113,14 @@ class TestCalcCosts:
     class FakeArgs:
         def __init__(self, **kwargs):
             defaults = {
-                "fuel_type": "diesel", "efficiency": 6.5, "tank": 60,
-                "fuel_price": 1.45, "kwh": 18, "kwh_price": 0.35,
-                "tolls": 0, "currency": "GBP",
+                "fuel_type": "diesel",
+                "efficiency": 6.5,
+                "tank": 60,
+                "fuel_price": 1.45,
+                "kwh": 18,
+                "kwh_price": 0.35,
+                "tolls": 0,
+                "currency": "GBP",
             }
             defaults.update(kwargs)
             for k, v in defaults.items():
