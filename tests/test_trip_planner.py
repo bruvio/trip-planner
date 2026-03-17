@@ -1,7 +1,7 @@
 """Tests for trip_planner.py utility functions."""
 
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -113,9 +113,14 @@ class TestCalcCosts:
     class FakeArgs:
         def __init__(self, **kwargs):
             defaults = {
-                "fuel_type": "diesel", "efficiency": 6.5, "tank": 60,
-                "fuel_price": 1.45, "kwh": 18, "kwh_price": 0.35,
-                "tolls": 0, "currency": "GBP",
+                "fuel_type": "diesel",
+                "efficiency": 6.5,
+                "tank": 60,
+                "fuel_price": 1.45,
+                "kwh": 18,
+                "kwh_price": 0.35,
+                "tolls": 0,
+                "currency": "GBP",
             }
             defaults.update(kwargs)
             for k, v in defaults.items():
@@ -139,6 +144,107 @@ class TestCalcCosts:
         result = tp.calc_costs(100, args)
         assert result["toll"] == 50
         assert result["total"] == result["fuel_cost"] + 50
+
+
+class TestPointCountry:
+    def test_france(self):
+        assert tp._point_country(48.8, 2.3) == "FR"  # Paris
+
+    def test_italy(self):
+        assert tp._point_country(41.9, 12.5) == "IT"  # Rome
+
+    def test_uk(self):
+        assert tp._point_country(51.5, -0.1) == "GB"  # London
+
+    def test_unknown(self):
+        assert tp._point_country(0, 0) is None  # middle of ocean
+
+
+class TestAnalyzeRoute:
+    def test_empty_route(self):
+        route = {"legs": []}
+        result = tp.analyze_route(route)
+        assert result["has_toll"] is False
+        assert result["has_ferry"] is False
+
+    def test_ferry_detection(self):
+        route = {
+            "distance": 50000,
+            "duration": 5400,
+            "geometry": {"coordinates": [[-1.2, 51.8], [1.8, 48.8]]},
+            "has_ferry": True,
+            "has_toll": False,
+            "toll_km": 0,
+            "ferry_segments": [
+                {"name": "Dover-Calais", "distance_km": 50, "duration_min": 90},
+            ],
+        }
+        result = tp.analyze_route(route)
+        assert result["has_ferry"] is True
+        assert len(result["ferry_segments"]) == 1
+        assert result["ferry_segments"][0]["name"] == "Dover-Calais"
+        assert result["is_channel_crossing"] is True
+        assert "GB" in result["countries"]
+        assert "FR" in result["countries"]
+
+
+class TestEstimateTollCost:
+    def test_french_tolls(self):
+        analysis = {"toll_km_by_country": {"FR": 100}, "countries": {"FR"}}
+        cost = tp.estimate_toll_cost(analysis, "EUR")
+        assert abs(cost - 9.0) < 0.01  # 100km * 0.09 EUR/km
+
+    def test_no_tolls(self):
+        analysis = {"toll_km_by_country": {}, "countries": set()}
+        cost = tp.estimate_toll_cost(analysis, "GBP")
+        assert cost == 0
+
+    def test_vignette_added(self):
+        analysis = {"toll_km_by_country": {}, "countries": {"CH"}}
+        cost = tp.estimate_toll_cost(analysis, "EUR")
+        assert cost == 40.0  # Swiss vignette
+
+
+class TestDeduplicateRoutes:
+    def test_removes_duplicates(self):
+        routes = [
+            ("A", {"distance": 1000}, {}),
+            ("B", {"distance": 1005}, {}),  # within 1%
+            ("C", {"distance": 2000}, {}),
+        ]
+        result = tp.deduplicate_routes(routes)
+        assert len(result) == 2
+
+    def test_keeps_different(self):
+        routes = [
+            ("A", {"distance": 1000}, {}),
+            ("B", {"distance": 1500}, {}),
+        ]
+        result = tp.deduplicate_routes(routes)
+        assert len(result) == 2
+
+
+class TestCalcCostsWithTollEstimate:
+    class FakeArgs:
+        def __init__(self, **kwargs):
+            defaults = {
+                "fuel_type": "diesel", "efficiency": 6.5, "tank": 60,
+                "fuel_price": 1.45, "kwh": 18, "kwh_price": 0.35,
+                "tolls": 0, "currency": "GBP",
+            }
+            defaults.update(kwargs)
+            for k, v in defaults.items():
+                setattr(self, k, v)
+
+    def test_auto_toll_used_when_no_manual(self):
+        args = self.FakeArgs(tolls=0)
+        result = tp.calc_costs(100, args, toll_estimate=25.0)
+        assert result["toll"] == 25.0
+
+    def test_manual_toll_overrides(self):
+        args = self.FakeArgs(tolls=50)
+        result = tp.calc_costs(100, args, toll_estimate=25.0)
+        assert result["toll"] == 50
 
 
 class TestAutoFilename:

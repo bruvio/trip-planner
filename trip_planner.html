@@ -169,6 +169,31 @@
     .toll-row span { font-size: 11px; color: var(--muted); }
     .toll-input { background: var(--surface); border: 1px solid var(--border); color: var(--amber); padding: 4px 8px; border-radius: 4px; font-family: var(--font-ui); font-size: 12px; width: 80px; text-align: right; outline: none; }
     .toll-input:focus { border-color: var(--amber); }
+
+    /* ── Advanced settings (collapsible) ── */
+    .advanced-toggle { width: 100%; background: none; border: 1px solid var(--border); color: var(--muted); padding: 7px 10px; border-radius: 4px; cursor: pointer; font-family: var(--font-ui); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; transition: all .15s; display: flex; align-items: center; justify-content: space-between; }
+    .advanced-toggle:hover { border-color: var(--amber); color: var(--amber); }
+    .advanced-toggle .arrow { transition: transform .2s; }
+    .advanced-toggle.open .arrow { transform: rotate(90deg); }
+    .advanced-body { display: none; padding-top: 10px; }
+    .advanced-body.open { display: flex; flex-direction: column; gap: 8px; }
+    .advanced-body .field input[type="text"] {
+      background: var(--surface); border: 1px solid var(--border); color: var(--text);
+      padding: 6px 8px; border-radius: 4px; font-family: var(--font-ui); font-size: 11px; outline: none;
+      transition: border-color .15s; width: 100%;
+    }
+    .advanced-body .field input[type="text"]:focus { border-color: var(--amber); }
+
+    /* ── Route selector cards ── */
+    .route-options { display: none; flex-direction: column; gap: 6px; }
+    .route-options.visible { display: flex; }
+    .route-card { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 2px solid var(--border); border-radius: 6px; padding: 10px 12px; cursor: pointer; transition: all .15s; }
+    .route-card:hover { border-color: var(--muted); }
+    .route-card.selected { border-color: var(--amber); }
+    .route-card-swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
+    .route-card-info { flex: 1; min-width: 0; }
+    .route-card-label { font-size: 11px; font-weight: 500; color: var(--text); }
+    .route-card-stats { font-size: 10px; color: var(--muted); margin-top: 2px; }
   </style>
 </head>
 <body>
@@ -267,6 +292,24 @@
         </div>
       </div>
 
+      <!-- Advanced Settings -->
+      <div class="section">
+        <button class="advanced-toggle" id="advanced-toggle">
+          <span>Advanced Settings</span>
+          <span class="arrow">&#9656;</span>
+        </button>
+        <div class="advanced-body" id="advanced-body">
+          <div class="field">
+            <label>OSRM Server URL</label>
+            <input type="text" id="osrm-url" value="http://localhost:5000" placeholder="http://localhost:5000">
+          </div>
+          <div class="field">
+            <label>Overpass API URL</label>
+            <input type="text" id="overpass-url" value="http://localhost:12346/api/interpreter" placeholder="http://localhost:12346/api/interpreter">
+          </div>
+        </div>
+      </div>
+
       <div id="status"></div>
 
       <button id="btn-plan">▶ Plan Route</button>
@@ -299,6 +342,12 @@
               <div class="stat-sub">estimate</div>
             </div>
           </div>
+        </div>
+
+        <!-- Route Options -->
+        <div class="section" id="route-options-section" style="display:none">
+          <div class="section-label">Route Options</div>
+          <div class="route-options visible" id="route-options"></div>
         </div>
 
         <!-- Cost breakdown -->
@@ -358,6 +407,8 @@
 const state = {
   waypoints: [null, null],   // [{lat,lon,display_name}, ...]
   route: null,
+  routes: [],                // [{label, route, color}, ...]
+  selectedRouteIdx: 0,
   pois: { fuel: [], ev: [], hotels: [], rest: [] },
   stopCount: 0,
 };
@@ -372,7 +423,7 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
   maxZoom: 20
 }).addTo(map);
 
-const layers = { route: null, markers: L.layerGroup().addTo(map) };
+const layers = { route: null, routeLines: [], markers: L.layerGroup().addTo(map) };
 
 function mkIcon(color, emoji) {
   return L.divIcon({
@@ -397,13 +448,15 @@ const geocodeCache = {};
 let lastGeocodeTime = 0;
 
 async function geocodeSearch(q) {
-  if (geocodeCache[q]) return geocodeCache[q];
+  if (geocodeCache[q]) { console.log(`[Geocode] Cache hit: "${q}"`); return geocodeCache[q]; }
   const now = Date.now();
   if (now - lastGeocodeTime < 1100) await sleep(1100 - (now - lastGeocodeTime));
   lastGeocodeTime = Date.now();
   const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&addressdetails=1`;
+  console.log(`[Geocode] Searching: "${q}"`);
   const r = await fetch(url, { headers: { 'Accept-Language': 'en' } });
   const data = await r.json();
+  console.log(`[Geocode] "${q}" -> ${data.length} result(s)${data.length ? ': ' + data[0].display_name.split(',')[0] : ''}`);
   geocodeCache[q] = data;
   return data;
 }
@@ -411,13 +464,57 @@ async function geocodeSearch(q) {
 // ═══════════════════════════════════════════════════════════
 // OSRM ROUTING
 // ═══════════════════════════════════════════════════════════
-async function planRoute(points) {
+function getOsrmUrl() {
+  return (document.getElementById('osrm-url').value || 'http://localhost:5000').replace(/\/+$/, '');
+}
+
+function isSelfHostedOsrm() {
+  const url = getOsrmUrl();
+  return !url.includes('router.project-osrm.org');
+}
+
+async function osrmFetch(points, exclude) {
+  const base = getOsrmUrl();
   const coords = points.map(p => `${p.lon},${p.lat}`).join(';');
-  const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=false`;
+  let url = `${base}/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=false`;
+  if (exclude) url += `&exclude=${exclude}`;
+  console.log(`[OSRM] ${exclude ? 'exclude=' + exclude : 'fastest'} -> ${url.substring(0, 100)}...`);
   const r = await fetch(url);
   const data = await r.json();
-  if (data.code !== 'Ok') throw new Error('Routing failed: ' + data.message);
-  return data.routes[0];
+  console.log(`[OSRM] ${exclude || 'fastest'}: code=${data.code}, routes=${data.routes?.length || 0}`);
+  if (data.code !== 'Ok') throw new Error('Routing failed: ' + (data.message || data.code));
+  const route = data.routes[0];
+  console.log(`[OSRM] ${exclude || 'fastest'}: ${(route.distance/1000).toFixed(0)} km, ${(route.duration/3600).toFixed(1)}h`);
+  return route;
+}
+
+async function planMultiRoute(points) {
+  const results = [];
+  console.log(`[Route] Planning route with ${points.length} waypoints`);
+  console.log(`[Route] OSRM URL: ${getOsrmUrl()}, self-hosted: ${isSelfHostedOsrm()}`);
+
+  // Always request the fastest route
+  const fastest = await osrmFetch(points);
+  results.push({ label: 'Fastest', route: fastest, color: '#f59e0b' });
+
+  // If self-hosted OSRM, also request toll-free and scenic routes
+  if (isSelfHostedOsrm()) {
+    try {
+      const tollFree = await osrmFetch(points, 'toll');
+      results.push({ label: 'Toll-free', route: tollFree, color: '#10b981' });
+    } catch (e) {
+      console.warn('[Route] Toll-free route unavailable:', e.message);
+    }
+    try {
+      const scenic = await osrmFetch(points, 'motorway');
+      results.push({ label: 'Scenic', route: scenic, color: '#8b5cf6' });
+    } catch (e) {
+      console.warn('[Route] Scenic route unavailable:', e.message);
+    }
+  }
+
+  console.log(`[Route] Got ${results.length} route option(s): ${results.map(r => r.label).join(', ')}`);
+  return results;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -434,18 +531,33 @@ function polyStr(coords) {
   return coords.map(c => `${c[1]},${c[0]}`).join(',');
 }
 
+function getOverpassUrl() {
+  return (document.getElementById('overpass-url').value || 'http://localhost:12346/api/interpreter').replace(/\/+$/, '');
+}
+
 async function overpassAroundQuery(routeCoords, tagFilters, radius) {
   const simplified = simplifyPolyline(routeCoords, 80);
   const poly = polyStr(simplified);
   const parts = tagFilters.map(tf => `${tf}(around:${radius},${poly});`).join('');
   const body = `[out:json][timeout:60];(${parts});out center 200;`;
-  const r = await fetch('https://overpass-api.de/api/interpreter', {
-    method: 'POST',
-    body: 'data=' + encodeURIComponent(body)
-  });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  const data = await r.json();
-  return data.elements || [];
+  const url = getOverpassUrl();
+  console.log(`[Overpass] Query: ${tagFilters.length} filters, radius=${radius}m, ${simplified.length} pts, url=${url}`);
+  console.log(`[Overpass] Body size: ${body.length} chars`);
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      body: 'data=' + encodeURIComponent(body)
+    });
+    console.log(`[Overpass] Response: HTTP ${r.status} ${r.statusText}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}`);
+    const data = await r.json();
+    const count = data.elements?.length || 0;
+    console.log(`[Overpass] Got ${count} elements`);
+    return data.elements || [];
+  } catch (e) {
+    console.error(`[Overpass] FAILED:`, e.message);
+    throw e;
+  }
 }
 
 function routeBBox(geojson, pad = 0.3) {
@@ -654,7 +766,6 @@ document.getElementById('fuel-type').addEventListener('change', e => {
 // ═══════════════════════════════════════════════════════════
 function renderPOIs(type, elements, iconKey, tabId, getDetail) {
   const tab = document.getElementById(tabId);
-  layers.markers.clearLayers();
 
   if (!elements.length) {
     tab.innerHTML = '<div class="poi-empty">None found along this route</div>';
@@ -686,6 +797,13 @@ function renderPOIs(type, elements, iconKey, tabId, getDetail) {
   });
 }
 
+const poiColors = {
+  fuel: '#6b7280',
+  ev: '#3b82f6',
+  hotel: '#8b5cf6',
+  rest: '#78716c',
+};
+
 function addPOIMarkers(elements, iconKey) {
   const toggle = {
     fuel: document.getElementById('show-fuel'),
@@ -695,11 +813,19 @@ function addPOIMarkers(elements, iconKey) {
   };
   if (!toggle[iconKey]?.checked) return;
 
+  const color = poiColors[iconKey] || '#6b7280';
+
   elements.slice(0, 50).forEach(el => {
     const c = elemCenter(el);
     if (!c?.lat || !c?.lon) return;
     const nm = elemName(el);
-    L.marker([c.lat, c.lon], { icon: icons[iconKey] })
+    L.circleMarker([c.lat, c.lon], {
+      radius: 6,
+      fillColor: color,
+      color: '#fff',
+      weight: 1.5,
+      fillOpacity: 0.85,
+    })
       .bindPopup(`<b>${nm}</b><br><small>${buildPopupDetail(el, iconKey)}</small>`)
       .addTo(layers.markers);
   });
@@ -781,24 +907,106 @@ document.getElementById('btn-plan').addEventListener('click', async () => {
 
   // Route
   setStatus('Calculating route…');
-  let route;
+  let routeResults;
   try {
-    route = await planRoute(resolvedWPs);
+    routeResults = await planMultiRoute(resolvedWPs);
   } catch (e) {
     setStatus('Routing error: ' + e.message, 'error');
     btn.disabled = false; return;
   }
 
-  state.route = route;
+  state.routes = routeResults;
+  state.selectedRouteIdx = 0;
+  state.route = routeResults[0].route;
   state.waypoints = resolvedWPs;
 
-  // Draw route
-  if (layers.route) map.removeLayer(layers.route);
+  // Clear previous route lines
+  layers.routeLines.forEach(l => map.removeLayer(l));
+  layers.routeLines = [];
+  if (layers.route) { map.removeLayer(layers.route); layers.route = null; }
   layers.markers.clearLayers();
 
-  layers.route = L.geoJSON(route.geometry, {
-    style: { color: '#f59e0b', weight: 4, opacity: 0.9 }
-  }).addTo(map);
+  // Draw all routes on the map
+  function drawAllRoutes(selectedIdx) {
+    layers.routeLines.forEach(l => map.removeLayer(l));
+    layers.routeLines = [];
+
+    // Draw non-selected routes first (behind)
+    routeResults.forEach((rr, i) => {
+      if (i === selectedIdx) return;
+      const line = L.geoJSON(rr.route.geometry, {
+        style: { color: rr.color, weight: 3, opacity: 0.4, dashArray: '8 6' }
+      }).addTo(map);
+      line.on('click', () => selectRoute(i));
+      layers.routeLines.push(line);
+    });
+
+    // Draw selected route on top
+    const sel = routeResults[selectedIdx];
+    const selectedLine = L.geoJSON(sel.route.geometry, {
+      style: { color: sel.color, weight: 5, opacity: 0.9 }
+    }).addTo(map);
+    selectedLine.on('click', () => selectRoute(selectedIdx));
+    layers.routeLines.push(selectedLine);
+  }
+
+  function updateStats(route) {
+    const distM = route.distance;
+    const distKmVal = distM / 1000;
+    const durationS = route.duration;
+
+    document.getElementById('stat-dist').textContent = fmtDist(distM);
+    document.getElementById('stat-dist-sub').textContent = `\u2248 ${(distM / 1609.34).toFixed(0)} miles`;
+    document.getElementById('stat-time').textContent = fmtTime(durationS);
+    document.getElementById('stat-time-sub').textContent = 'without stops';
+
+    const costs = calcCosts(distKmVal);
+    document.getElementById('stat-refills').textContent = costs.refills > 0 ? costs.refills : '\u2014';
+    document.getElementById('stat-refills-sub').textContent = costs.refills > 0 ? 'estimated' : 'no stops needed';
+    document.getElementById('stat-total').textContent = costs.sym + costs.total.toFixed(2);
+
+    const fuelType = document.getElementById('fuel-type').value;
+    document.getElementById('cost-fuel-label').textContent = fuelType === 'electric' ? '\u26fd Base fuel' : '\u26fd Fuel';
+    document.getElementById('cost-fuel').textContent = fuelType === 'electric' ? '\u2014' : costs.sym + costs.fuelCost.toFixed(2);
+    document.getElementById('cost-ev').textContent = costs.sym + costs.evCost.toFixed(2);
+    document.getElementById('cost-toll').textContent = costs.sym + costs.toll.toFixed(2);
+    document.getElementById('cost-total-row').innerHTML = `<strong>${costs.sym + costs.total.toFixed(2)}</strong>`;
+  }
+
+  function populateRouteCards() {
+    const container = document.getElementById('route-options');
+    container.innerHTML = routeResults.map((rr, i) => {
+      const d = fmtDist(rr.route.distance);
+      const t = fmtTime(rr.route.duration);
+      return `<div class="route-card${i === state.selectedRouteIdx ? ' selected' : ''}" data-route-idx="${i}">
+        <div class="route-card-swatch" style="background:${rr.color}"></div>
+        <div class="route-card-info">
+          <div class="route-card-label">${rr.label}</div>
+          <div class="route-card-stats">${d} &middot; ${t}</div>
+        </div>
+      </div>`;
+    }).join('');
+
+    container.querySelectorAll('.route-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const idx = parseInt(card.dataset.routeIdx);
+        selectRoute(idx);
+      });
+    });
+
+    // Show/hide the route-options section
+    document.getElementById('route-options-section').style.display = routeResults.length > 1 ? '' : 'none';
+  }
+
+  function selectRoute(idx) {
+    state.selectedRouteIdx = idx;
+    state.route = routeResults[idx].route;
+    drawAllRoutes(idx);
+    updateStats(routeResults[idx].route);
+    populateRouteCards();
+  }
+
+  drawAllRoutes(0);
 
   // Waypoint markers
   resolvedWPs.forEach((wp, i) => {
@@ -808,36 +1016,20 @@ document.getElementById('btn-plan').addEventListener('click', async () => {
       .addTo(layers.markers);
   });
 
-  map.fitBounds(layers.route.getBounds(), { padding: [30, 30] });
+  // Fit map to the selected route
+  const allBounds = L.geoJSON(routeResults[0].route.geometry).getBounds();
+  map.fitBounds(allBounds, { padding: [30, 30] });
   document.getElementById('map-legend').classList.add('visible');
 
-  // Stats
-  const distM = route.distance;
-  const distKmVal = distM / 1000;
-  const durationS = route.duration;
-
-  document.getElementById('stat-dist').textContent = fmtDist(distM);
-  document.getElementById('stat-dist-sub').textContent = `≈ ${(distM / 1609.34).toFixed(0)} miles`;
-  document.getElementById('stat-time').textContent = fmtTime(durationS);
-  document.getElementById('stat-time-sub').textContent = 'without stops';
-
-  const costs = calcCosts(distKmVal);
-  document.getElementById('stat-refills').textContent = costs.refills > 0 ? costs.refills : '—';
-  document.getElementById('stat-refills-sub').textContent = costs.refills > 0 ? 'estimated' : 'no stops needed';
-  document.getElementById('stat-total').textContent = costs.sym + costs.total.toFixed(2);
-
-  const fuelType = document.getElementById('fuel-type').value;
-  document.getElementById('cost-fuel-label').textContent = fuelType === 'electric' ? '⛽ Base fuel' : '⛽ Fuel';
-  document.getElementById('cost-fuel').textContent = fuelType === 'electric' ? '—' : costs.sym + costs.fuelCost.toFixed(2);
-  document.getElementById('cost-ev').textContent = costs.sym + costs.evCost.toFixed(2);
-  document.getElementById('cost-toll').textContent = costs.sym + costs.toll.toFixed(2);
-  document.getElementById('cost-total-row').innerHTML = `<strong>${costs.sym + costs.total.toFixed(2)}</strong>`;
+  // Stats for the initially selected (fastest) route
+  updateStats(routeResults[0].route);
+  populateRouteCards();
 
   // Show results
   document.getElementById('results').style.display = 'flex';
 
   // POIs (using around filter for accurate route-proximity results)
-  const routeCoords = route.geometry.coordinates;
+  const routeCoords = state.route.geometry.coordinates;
 
   setStatus('Loading fuel stations…');
   try {
@@ -847,13 +1039,17 @@ document.getElementById('btn-plan').addEventListener('click', async () => {
       .map(el => { const c = elemCenter(el); el._routeDist = c ? nearestPointOnRoute(routeCoords, c.lat, c.lon) : 999; return el; })
       .sort((a,b) => a._routeDist - b._routeDist);
     state.pois.fuel = filtered;
+    document.querySelector('[data-tab="fuel"]').textContent = `\u26fd Fuel (${filtered.length})`;
     renderPOIs('fuel', filtered, 'fuel', 'tab-fuel', el => {
       const t = el.tags || {};
       const fuels = [t['fuel:diesel'] && 'Diesel', t['fuel:octane_95'] && 'Petrol', t['fuel:lpg'] && 'LPG'].filter(Boolean);
       return fuels.join(' · ') || (t.brand || 'Fuel station');
     });
     addPOIMarkers(filtered, 'fuel');
-  } catch (e) { document.getElementById('tab-fuel').innerHTML = '<div class="poi-empty">Error loading fuel stations: ' + e.message + '</div>'; }
+  } catch (e) {
+    document.querySelector('[data-tab="fuel"]').textContent = '\u26fd Fuel (!)';
+    document.getElementById('tab-fuel').innerHTML = '<div class="poi-empty">Error loading fuel stations: ' + e.message + '</div>';
+  }
 
   await sleep(2500);
   setStatus('Loading EV charging…');
@@ -864,13 +1060,17 @@ document.getElementById('btn-plan').addEventListener('click', async () => {
       .map(el => { const c = elemCenter(el); el._routeDist = c ? nearestPointOnRoute(routeCoords, c.lat, c.lon) : 999; return el; })
       .sort((a,b) => a._routeDist - b._routeDist);
     state.pois.ev = filtered;
+    document.querySelector('[data-tab="ev"]').textContent = `\u26a1 EV (${filtered.length})`;
     renderPOIs('ev', filtered, 'ev', 'tab-ev', el => {
       const t = el.tags || {};
       const sockets = [t['socket:type2'] && 'Type2', t['socket:chademo'] && 'CHAdeMO', t['socket:type2_combo'] && 'CCS'].filter(Boolean);
       return sockets.join(' · ') || (t.network || 'Charging station');
     });
     addPOIMarkers(filtered, 'ev');
-  } catch (e) { document.getElementById('tab-ev').innerHTML = '<div class="poi-empty">Error loading EV chargers: ' + e.message + '</div>'; }
+  } catch (e) {
+    document.querySelector('[data-tab="ev"]').textContent = '\u26a1 EV (!)';
+    document.getElementById('tab-ev').innerHTML = '<div class="poi-empty">Error loading EV chargers: ' + e.message + '</div>';
+  }
 
   await sleep(2500);
   setStatus('Loading hotels…');
@@ -881,13 +1081,17 @@ document.getElementById('btn-plan').addEventListener('click', async () => {
       .map(el => { const c = elemCenter(el); el._routeDist = c ? nearestPointOnRoute(routeCoords, c.lat, c.lon) : 999; return el; })
       .sort((a,b) => a._routeDist - b._routeDist);
     state.pois.hotels = filtered;
+    document.querySelector('[data-tab="hotels"]').innerHTML = `\ud83c\udfe8 Hotels (${filtered.length})`;
     renderPOIs('hotels', filtered, 'hotel', 'tab-hotels', el => {
       const t = el.tags || {};
-      const stars = t.stars ? '★'.repeat(parseInt(t.stars)) : '';
+      const stars = t.stars ? '\u2605'.repeat(parseInt(t.stars)) : '';
       return stars || t.tourism || 'Hotel';
     });
     addPOIMarkers(filtered, 'hotel');
-  } catch (e) { document.getElementById('tab-hotels').innerHTML = '<div class="poi-empty">Error loading hotels: ' + e.message + '</div>'; }
+  } catch (e) {
+    document.querySelector('[data-tab="hotels"]').innerHTML = '\ud83c\udfe8 Hotels (!)';
+    document.getElementById('tab-hotels').innerHTML = '<div class="poi-empty">Error loading hotels: ' + e.message + '</div>';
+  }
 
   await sleep(2500);
   setStatus('Loading rest areas…');
@@ -898,12 +1102,16 @@ document.getElementById('btn-plan').addEventListener('click', async () => {
       .map(el => { const c = elemCenter(el); el._routeDist = c ? nearestPointOnRoute(routeCoords, c.lat, c.lon) : 999; return el; })
       .sort((a,b) => a._routeDist - b._routeDist);
     state.pois.rest = filtered;
+    document.querySelector('[data-tab="rest"]').innerHTML = `\ud83c\udd7f\ufe0f Rest (${filtered.length})`;
     renderPOIs('rest', filtered, 'rest', 'tab-rest', el => {
       const t = el.tags || {};
       return t.fee ? 'Fee: ' + t.fee : (t.highway === 'services' ? 'Services' : 'Rest area');
     });
     addPOIMarkers(filtered, 'rest');
-  } catch (e) { document.getElementById('tab-rest').innerHTML = '<div class="poi-empty">Error loading rest areas</div>'; }
+  } catch (e) {
+    document.querySelector('[data-tab="rest"]').innerHTML = '\ud83c\udd7f\ufe0f Rest (!)';
+    document.getElementById('tab-rest').innerHTML = '<div class="poi-empty">Error loading rest areas: ' + e.message + '</div>';
+  }
 
   clearStatus();
   document.getElementById('btn-export').disabled = false;
@@ -1011,6 +1219,16 @@ document.getElementById('manual-toll').addEventListener('input', () => {
   document.getElementById('cost-toll').textContent = costs.sym + costs.toll.toFixed(2);
   document.getElementById('cost-total-row').innerHTML = `<strong>${costs.sym + costs.total.toFixed(2)}</strong>`;
   document.getElementById('stat-total').textContent = costs.sym + costs.total.toFixed(2);
+});
+
+// ═══════════════════════════════════════════════════════════
+// ADVANCED SETTINGS TOGGLE
+// ═══════════════════════════════════════════════════════════
+document.getElementById('advanced-toggle').addEventListener('click', () => {
+  const toggle = document.getElementById('advanced-toggle');
+  const body = document.getElementById('advanced-body');
+  toggle.classList.toggle('open');
+  body.classList.toggle('open');
 });
 </script>
 </body>
