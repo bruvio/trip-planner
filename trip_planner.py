@@ -202,7 +202,9 @@ def _route_ors(waypoints, api_key, alternatives=False, avoid=None):
             "Accept": "application/json, application/geo+json",
         },
     )
-    log.debug("ORS request: %d bytes, avoid=%s, alternatives=%s", len(req_body), avoid, alternatives)
+    log.debug(
+        "ORS request: %d bytes, avoid=%s, alternatives=%s", len(req_body), avoid, alternatives
+    )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode())
@@ -232,11 +234,13 @@ def _route_ors(waypoints, api_key, alternatives=False, avoid=None):
                     dist_km = step.get("distance", 0) / 1000
                     dur_min = step.get("duration", 0) / 60
                     if dist_km > 1 and dur_min > 5:
-                        ferry_segments.append({
-                            "name": step.get("name", "Ferry"),
-                            "distance_km": dist_km,
-                            "duration_min": dur_min,
-                        })
+                        ferry_segments.append(
+                            {
+                                "name": step.get("name", "Ferry"),
+                                "distance_km": dist_km,
+                                "duration_min": dur_min,
+                            }
+                        )
 
         # Toll info from extras
         tollway_summary = extras.get("tollways", {}).get("summary", [])
@@ -253,18 +257,20 @@ def _route_ors(waypoints, api_key, alternatives=False, avoid=None):
             all_steps.extend(seg.get("steps", []))
         major_roads = _extract_major_roads(all_steps, source="ors")
 
-        routes.append({
-            "distance": summary.get("distance", 0),
-            "duration": summary.get("duration", 0),
-            "geometry": feat.get("geometry", {}),
-            "ferry_segments": ferry_segments,
-            "has_ferry": len(ferry_segments) > 0,
-            "has_toll": toll_pct > 0,
-            "toll_km": toll_km,
-            "toll_pct": toll_pct,
-            "major_roads": major_roads,
-            "_source": "ors",
-        })
+        routes.append(
+            {
+                "distance": summary.get("distance", 0),
+                "duration": summary.get("duration", 0),
+                "geometry": feat.get("geometry", {}),
+                "ferry_segments": ferry_segments,
+                "has_ferry": len(ferry_segments) > 0,
+                "has_toll": toll_pct > 0,
+                "toll_km": toll_km,
+                "toll_pct": toll_pct,
+                "major_roads": major_roads,
+                "_source": "ors",
+            }
+        )
 
     return routes
 
@@ -314,11 +320,13 @@ def _route_osrm(waypoints, alternatives=False, exclude=None, base_url=None):
         for leg in r.get("legs", []):
             for step in leg.get("steps", []):
                 if step.get("mode") == "ferry":
-                    ferry_segments.append({
-                        "name": step.get("name", "Ferry"),
-                        "distance_km": step.get("distance", 0) / 1000,
-                        "duration_min": step.get("duration", 0) / 60,
-                    })
+                    ferry_segments.append(
+                        {
+                            "name": step.get("name", "Ferry"),
+                            "distance_km": step.get("distance", 0) / 1000,
+                            "duration_min": step.get("duration", 0) / 60,
+                        }
+                    )
 
         # Extract major roads
         all_steps = []
@@ -326,18 +334,20 @@ def _route_osrm(waypoints, alternatives=False, exclude=None, base_url=None):
             all_steps.extend(leg.get("steps", []))
         major_roads = _extract_major_roads(all_steps, source="osrm")
 
-        routes.append({
-            "distance": r["distance"],
-            "duration": r["duration"],
-            "geometry": r["geometry"],
-            "ferry_segments": ferry_segments,
-            "has_ferry": len(ferry_segments) > 0,
-            "has_toll": False,  # OSRM demo doesn't provide toll data
-            "toll_km": 0,
-            "toll_pct": 0,
-            "major_roads": major_roads,
-            "_source": "osrm",
-        })
+        routes.append(
+            {
+                "distance": r["distance"],
+                "duration": r["duration"],
+                "geometry": r["geometry"],
+                "ferry_segments": ferry_segments,
+                "has_ferry": len(ferry_segments) > 0,
+                "has_toll": False,  # OSRM demo doesn't provide toll data
+                "toll_km": 0,
+                "toll_pct": 0,
+                "major_roads": major_roads,
+                "_source": "osrm",
+            }
+        )
 
     return routes
 
@@ -363,38 +373,39 @@ def route_request(waypoints, api_key=None, alternatives=False, avoid=None, osrm_
     if avoid and not is_self_hosted:
         log.warning("--route-mode requires ORS API key or self-hosted OSRM for avoid features")
 
-    return _route_osrm(waypoints, alternatives=alternatives, exclude=osrm_exclude,
-                        base_url=osrm_url)
+    return _route_osrm(
+        waypoints, alternatives=alternatives, exclude=osrm_exclude, base_url=osrm_url
+    )
 
 
 # ─── ROUTE ANALYSIS ─────────────────────────────────────────
 # Country bounding boxes for toll rate estimation (lat_min, lat_max, lon_min, lon_max)
 COUNTRY_BOXES = {
-    'FR': (42.3, 51.1, -5.1, 8.2),
-    'IT': (36.6, 47.1, 6.6, 18.5),
-    'ES': (36.0, 43.8, -9.3, 3.3),
-    'CH': (45.8, 47.8, 5.9, 10.5),
-    'AT': (46.4, 49.0, 9.5, 17.2),
-    'DE': (47.3, 55.1, 5.9, 15.0),
-    'GB': (49.9, 58.7, -8.2, 1.8),
+    "FR": (42.3, 51.1, -5.1, 8.2),
+    "IT": (36.6, 47.1, 6.6, 18.5),
+    "ES": (36.0, 43.8, -9.3, 3.3),
+    "CH": (45.8, 47.8, 5.9, 10.5),
+    "AT": (46.4, 49.0, 9.5, 17.2),
+    "DE": (47.3, 55.1, 5.9, 15.0),
+    "GB": (49.9, 58.7, -8.2, 1.8),
 }
 
 # Approximate toll rate per km on motorways (in EUR)
 TOLL_RATES_EUR = {
-    'FR': 0.09,
-    'IT': 0.07,
-    'ES': 0.10,
-    'CH': 0.00,  # vignette system, flat fee
-    'AT': 0.00,  # vignette system, flat fee
-    'DE': 0.00,  # no car tolls
-    'GB': 0.00,  # no general motorway tolls
+    "FR": 0.09,
+    "IT": 0.07,
+    "ES": 0.10,
+    "CH": 0.00,  # vignette system, flat fee
+    "AT": 0.00,  # vignette system, flat fee
+    "DE": 0.00,  # no car tolls
+    "GB": 0.00,  # no general motorway tolls
 }
 TOLL_RATE_DEFAULT = 0.08
 
 # Vignette costs (flat fees for countries that use them)
 VIGNETTE_COSTS_EUR = {
-    'CH': 40.0,  # 1-year vignette (mandatory)
-    'AT': 10.0,  # 10-day vignette
+    "CH": 40.0,  # 1-year vignette (mandatory)
+    "AT": 10.0,  # 10-day vignette
 }
 
 
@@ -566,7 +577,9 @@ def _run_overpass(query, timeout=60, url=None):
         result = http_post(endpoint, data_enc, timeout=timeout + 15)
     except (urllib.error.URLError, ConnectionError, OSError) as e:
         if endpoint != OVERPASS_PUBLIC and not _overpass_fallback_active:
-            log.warning("Overpass at %s unreachable (%s), falling back to public API", endpoint[:60], e)
+            log.warning(
+                "Overpass at %s unreachable (%s), falling back to public API", endpoint[:60], e
+            )
             _overpass_fallback_active = True
             endpoint = OVERPASS_PUBLIC
             result = http_post(endpoint, data_enc, timeout=timeout + 15)
@@ -964,8 +977,16 @@ def apply_defaults(args):
 
 
 # ─── MARKDOWN GENERATION ─────────────────────────────────────
-def generate_markdown(waypoints, route, pois, costs, args,
-                      route_options=None, selected_label=None, route_analysis=None) -> str:
+def generate_markdown(
+    waypoints,
+    route,
+    pois,
+    costs,
+    args,
+    route_options=None,
+    selected_label=None,
+    route_analysis=None,
+) -> str:
     sym = costs["sym"]
     dist_m = route["distance"]
     dur_s = route["duration"]
@@ -1052,7 +1073,11 @@ def generate_markdown(waypoints, route, pois, costs, args,
         lines.append(f"| Fuel ({args.fuel_type}) | {sym}{costs['fuel_cost']:.2f} |")
     if args.fuel_type in ("electric", "hybrid"):
         lines.append(f"| Charging | {sym}{costs['ev_cost']:.2f} |")
-    toll_label = "Tolls (estimated)" if not args.tolls and route_analysis and route_analysis["has_toll"] else "Tolls"
+    toll_label = (
+        "Tolls (estimated)"
+        if not args.tolls and route_analysis and route_analysis["has_toll"]
+        else "Tolls"
+    )
     lines.append(f"| {toll_label} | {sym}{costs['toll']:.2f} |")
     lines.append(f"| **Total** | **{sym}{costs['total']:.2f}** |")
     lines += [
@@ -1094,7 +1119,7 @@ def generate_markdown(waypoints, route, pois, costs, args,
 
 
 # ─── MAP GENERATION ──────────────────────────────────────────
-MAP_TEMPLATE = '''<!DOCTYPE html>
+MAP_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -1253,11 +1278,10 @@ legend.onAdd = function() {{
 legend.addTo(map);
 </script>
 </body>
-</html>'''
+</html>"""
 
 
-def generate_map_html(waypoints, route_geometry, pois, title,
-                      route_options=None, selected_idx=0):
+def generate_map_html(waypoints, route_geometry, pois, title, route_options=None, selected_idx=0):
     """Generate a standalone HTML file with a Leaflet map showing all route options."""
     wp_json = json.dumps(
         [{"lat": wp["lat"], "lon": wp["lon"], "name": wp["short"]} for wp in waypoints]
@@ -1287,24 +1311,30 @@ def generate_map_html(waypoints, route_geometry, pois, title,
     if route_options and len(route_options) > 1:
         for i, (label, r, analysis) in enumerate(route_options):
             toll_str = f"{analysis['toll_km']:.0f} km tolls" if analysis["has_toll"] else "no tolls"
-            ferry_str = f", {len(analysis['ferry_segments'])} ferry" if analysis["has_ferry"] else ""
-            routes_json_list.append({
-                "label": label,
-                "geometry": r.get("geometry", {}),
-                "distance": fmt_dist(r["distance"]),
-                "duration": fmt_time(r["duration"]),
-                "info": f"{toll_str}{ferry_str}",
-                "selected": i == selected_idx,
-            })
+            ferry_str = (
+                f", {len(analysis['ferry_segments'])} ferry" if analysis["has_ferry"] else ""
+            )
+            routes_json_list.append(
+                {
+                    "label": label,
+                    "geometry": r.get("geometry", {}),
+                    "distance": fmt_dist(r["distance"]),
+                    "duration": fmt_time(r["duration"]),
+                    "info": f"{toll_str}{ferry_str}",
+                    "selected": i == selected_idx,
+                }
+            )
     else:
-        routes_json_list.append({
-            "label": "Route",
-            "geometry": route_geometry,
-            "distance": "",
-            "duration": "",
-            "info": "",
-            "selected": True,
-        })
+        routes_json_list.append(
+            {
+                "label": "Route",
+                "geometry": route_geometry,
+                "distance": "",
+                "duration": "",
+                "info": "",
+                "selected": True,
+            }
+        )
 
     return MAP_TEMPLATE.format(
         title=title,
@@ -1523,7 +1553,9 @@ def main():
             pois = saved.get("pois", {})
             data_loaded = True
             print(f"  {c('OK', C.GREEN)} Loaded from {c(args.load_data, C.CYAN)}")
-            print(f"  {c('->', C.GREEN)} {len(all_route_options)} route(s), {sum(len(v) for v in pois.values())} POIs")
+            print(
+                f"  {c('->', C.GREEN)} {len(all_route_options)} route(s), {sum(len(v) for v in pois.values())} POIs"
+            )
         except Exception as e:
             print(c(f"  FAIL {e}", C.RED))
             sys.exit(1)
@@ -1559,7 +1591,11 @@ def main():
         # ── Plan route(s) ──
         section("Calculating Routes", "🗺️")
         print(f"  {c('->', C.GREEN)} Provider: {c(provider, C.CYAN)}")
-        if not api_key and not osrm_self_hosted and route_mode in ("no-tolls", "no-ferries", "scenic"):
+        if (
+            not api_key
+            and not osrm_self_hosted
+            and route_mode in ("no-tolls", "no-ferries", "scenic")
+        ):
             print(
                 f"  {c('!', C.AMBER)} Set ORS_API_KEY or use self-hosted OSRM for toll-free/scenic routing."
             )
@@ -1572,7 +1608,12 @@ def main():
         if route_mode in ("fastest", "shortest", "compare"):
             try:
                 print(f"  {c('->', C.GREEN)} Requesting routes...", end=" ", flush=True)
-                routes = route_request(waypoints, api_key, osrm_url=args.osrm_url, alternatives=(route_mode == "compare"))
+                routes = route_request(
+                    waypoints,
+                    api_key,
+                    osrm_url=args.osrm_url,
+                    alternatives=(route_mode == "compare"),
+                )
                 print(c(f"OK ({len(routes)} option(s))", C.GREEN))
                 for i, r in enumerate(routes):
                     label = "Fastest" if i == 0 else f"Alternative {i}"
@@ -1583,7 +1624,9 @@ def main():
         elif route_mode == "no-tolls":
             try:
                 print(f"  {c('->', C.GREEN)} Requesting toll-free route...", end=" ", flush=True)
-                routes = route_request(waypoints, api_key, osrm_url=args.osrm_url, avoid=["tollways"])
+                routes = route_request(
+                    waypoints, api_key, osrm_url=args.osrm_url, avoid=["tollways"]
+                )
                 print(c("OK", C.GREEN))
                 all_route_options.append(("Cheapest", routes[0], analyze_route(routes[0])))
             except Exception as e:
@@ -1592,7 +1635,9 @@ def main():
         elif route_mode == "no-ferries":
             try:
                 print(f"  {c('->', C.GREEN)} Requesting ferry-free route...", end=" ", flush=True)
-                routes = route_request(waypoints, api_key, osrm_url=args.osrm_url, avoid=["ferries"])
+                routes = route_request(
+                    waypoints, api_key, osrm_url=args.osrm_url, avoid=["ferries"]
+                )
                 print(c("OK", C.GREEN))
                 all_route_options.append(("No ferry", routes[0], analyze_route(routes[0])))
             except Exception as e:
@@ -1600,8 +1645,14 @@ def main():
                 sys.exit(1)
         elif route_mode == "scenic":
             try:
-                print(f"  {c('->', C.GREEN)} Requesting scenic route (no motorways)...", end=" ", flush=True)
-                routes = route_request(waypoints, api_key, osrm_url=args.osrm_url, avoid=["highways"])
+                print(
+                    f"  {c('->', C.GREEN)} Requesting scenic route (no motorways)...",
+                    end=" ",
+                    flush=True,
+                )
+                routes = route_request(
+                    waypoints, api_key, osrm_url=args.osrm_url, avoid=["highways"]
+                )
                 print(c("OK", C.GREEN))
                 all_route_options.append(("Scenic", routes[0], analyze_route(routes[0])))
             except Exception as e:
@@ -1619,8 +1670,12 @@ def main():
             should_try_toll_free = default_analysis["has_toll"] or osrm_self_hosted
             if should_try_toll_free:
                 try:
-                    print(f"  {c('->', C.GREEN)} Requesting toll-free route...", end=" ", flush=True)
-                    no_toll_routes = route_request(waypoints, api_key, osrm_url=args.osrm_url, avoid=["tollways"])
+                    print(
+                        f"  {c('->', C.GREEN)} Requesting toll-free route...", end=" ", flush=True
+                    )
+                    no_toll_routes = route_request(
+                        waypoints, api_key, osrm_url=args.osrm_url, avoid=["tollways"]
+                    )
                     print(c("OK", C.GREEN))
                     all_route_options.append(
                         ("Cheapest", no_toll_routes[0], analyze_route(no_toll_routes[0]))
@@ -1632,8 +1687,12 @@ def main():
             should_try_ferry_free = default_analysis["has_ferry"] or osrm_self_hosted
             if should_try_ferry_free:
                 try:
-                    print(f"  {c('->', C.GREEN)} Requesting ferry-free route...", end=" ", flush=True)
-                    no_ferry_routes = route_request(waypoints, api_key, osrm_url=args.osrm_url, avoid=["ferries"])
+                    print(
+                        f"  {c('->', C.GREEN)} Requesting ferry-free route...", end=" ", flush=True
+                    )
+                    no_ferry_routes = route_request(
+                        waypoints, api_key, osrm_url=args.osrm_url, avoid=["ferries"]
+                    )
                     print(c("OK", C.GREEN))
                     all_route_options.append(
                         ("No ferry", no_ferry_routes[0], analyze_route(no_ferry_routes[0]))
@@ -1644,7 +1703,9 @@ def main():
             # Scenic variant (avoid motorways)
             try:
                 print(f"  {c('->', C.GREEN)} Requesting scenic route...", end=" ", flush=True)
-                scenic_routes = route_request(waypoints, api_key, osrm_url=args.osrm_url, avoid=["highways"])
+                scenic_routes = route_request(
+                    waypoints, api_key, osrm_url=args.osrm_url, avoid=["highways"]
+                )
                 print(c("OK", C.GREEN))
                 all_route_options.append(
                     ("Scenic", scenic_routes[0], analyze_route(scenic_routes[0]))
@@ -1657,10 +1718,12 @@ def main():
 
         # Label the shortest route if it differs from fastest
         if len(all_route_options) > 1:
-            shortest_idx = min(range(len(all_route_options)),
-                               key=lambda i: all_route_options[i][1]["distance"])
-            fastest_idx = min(range(len(all_route_options)),
-                              key=lambda i: all_route_options[i][1]["duration"])
+            shortest_idx = min(
+                range(len(all_route_options)), key=lambda i: all_route_options[i][1]["distance"]
+            )
+            fastest_idx = min(
+                range(len(all_route_options)), key=lambda i: all_route_options[i][1]["duration"]
+            )
             label, r, a = all_route_options[shortest_idx]
             if shortest_idx != fastest_idx and label.startswith("Alternative"):
                 all_route_options[shortest_idx] = ("Shortest", r, a)
@@ -1668,7 +1731,9 @@ def main():
         # ── Route comparison table (ViaMichelin style) ──
         if len(all_route_options) > 1 and route_mode == "compare":
             section("Route Options", "🔀")
-            sym_preview = {"GBP": "\u00a3", "EUR": "\u20ac", "USD": "$"}.get(args.currency, "\u00a3")
+            sym_preview = {"GBP": "\u00a3", "EUR": "\u20ac", "USD": "$"}.get(
+                args.currency, "\u00a3"
+            )
             print()
             for i, (label, r, analysis) in enumerate(all_route_options, 1):
                 toll_est = estimate_toll_cost(analysis, args.currency)
@@ -1680,7 +1745,9 @@ def main():
                     fmt_time(r["duration"]),
                 ]
                 if analysis["has_toll"]:
-                    detail_parts.append(f"tolls: ~{sym_preview}{toll_est:.0f} ({analysis['toll_km']:.0f} km)")
+                    detail_parts.append(
+                        f"tolls: ~{sym_preview}{toll_est:.0f} ({analysis['toll_km']:.0f} km)"
+                    )
                 else:
                     detail_parts.append("no tolls")
                 if analysis["has_ferry"]:
@@ -1695,7 +1762,7 @@ def main():
             # Prompt for selection if interactive
             if is_tty:
                 try:
-                    choice = input(f"  Select route [1]: ").strip() or "1"
+                    choice = input("  Select route [1]: ").strip() or "1"
                     idx = int(choice) - 1
                     if 0 <= idx < len(all_route_options):
                         selected_idx = idx
@@ -1707,8 +1774,9 @@ def main():
                 selected_idx = 0
         elif route_mode == "shortest" and len(all_route_options) > 1:
             # Pick shortest distance
-            selected_idx = min(range(len(all_route_options)),
-                               key=lambda i: all_route_options[i][1]["distance"])
+            selected_idx = min(
+                range(len(all_route_options)), key=lambda i: all_route_options[i][1]["distance"]
+            )
         else:
             selected_idx = 0
 
@@ -1749,7 +1817,9 @@ def main():
 
     if route_analysis["has_ferry"]:
         for seg in route_analysis["ferry_segments"]:
-            ferry_detail = f"{seg['name']} ({seg['distance_km']:.0f} km, ~{seg['duration_min']:.0f} min)"
+            ferry_detail = (
+                f"{seg['name']} ({seg['distance_km']:.0f} km, ~{seg['duration_min']:.0f} min)"
+            )
             row("Ferry crossing", ferry_detail, C.BLUE)
         print(f"  {c('  (ferry booking required, cost not included)', C.GREY)}")
         if route_analysis["is_channel_crossing"]:
@@ -1908,7 +1978,9 @@ def main():
         "Charging cost",
         fmt_cost(sym, costs["ev_cost"]) if args.fuel_type in ("electric", "hybrid") else "-",
     )
-    toll_label = "Toll cost (estimated)" if not args.tolls and route_analysis["has_toll"] else "Toll cost"
+    toll_label = (
+        "Toll cost (estimated)" if not args.tolls and route_analysis["has_toll"] else "Toll cost"
+    )
     row(toll_label, fmt_cost(sym, costs["toll"]))
     row("Fuel stations found", str(len(pois.get("fuel", []))))
     row("EV chargers found", str(len(pois.get("ev", []))))
@@ -1925,7 +1997,11 @@ def main():
         section("Exporting Report", "📄")
         try:
             md = generate_markdown(
-                waypoints, route, pois, costs, args,
+                waypoints,
+                route,
+                pois,
+                costs,
+                args,
                 route_options=all_route_options,
                 selected_label=selected_label,
                 route_analysis=route_analysis,
@@ -1945,7 +2021,10 @@ def main():
         try:
             title = f"{waypoints[0]['short']} -> {waypoints[-1]['short']}"
             html = generate_map_html(
-                waypoints, route["geometry"], pois, title,
+                waypoints,
+                route["geometry"],
+                pois,
+                title,
                 route_options=all_route_options,
                 selected_idx=selected_idx,
             )
