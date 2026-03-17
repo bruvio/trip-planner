@@ -516,11 +516,12 @@ def _build_query(poly_str, poi_specs, timeout):
     return f"[out:json][timeout:{timeout}];(" + "".join(parts) + ");out center 200;"
 
 
-def _run_overpass(query, timeout=60):
+def _run_overpass(query, timeout=60, url=None):
     """Execute a single Overpass query, return elements list."""
-    log.debug("Overpass query: %d chars, timeout=%ds", len(query), timeout)
+    endpoint = url or OVERPASS_URL
+    log.debug("Overpass query: %d chars, timeout=%ds, url=%s", len(query), timeout, endpoint[:60])
     data_enc = urllib.parse.urlencode({"data": query})
-    result = http_post(OVERPASS_URL, data_enc, timeout=timeout + 15)
+    result = http_post(endpoint, data_enc, timeout=timeout + 15)
     elements = result.get("elements", [])
     log.debug("Overpass returned %d elements", len(elements))
     return elements
@@ -535,12 +536,14 @@ def overpass_combined_query(
     rest_radius=2000,
     timeout=60,
     progress_fn=None,
+    overpass_url=None,
 ):
     """Query POI types along the route one type at a time per segment.
 
     Each POI type uses its own lightweight query (2-4 specs) per segment,
     allowing larger segments (50+ points) without timeouts. Types are queried
-    sequentially with delays to respect Overpass rate limits.
+    sequentially with delays to respect public Overpass rate limits.
+    Self-hosted Overpass skips delays entirely.
     """
     skip = skip_types or set()
 
@@ -598,6 +601,8 @@ def overpass_combined_query(
     all_elements = []
     seen_ids = set()
     request_count = 0
+    is_local = overpass_url and "localhost" in overpass_url
+    delay = 0.0 if is_local else 2.0  # no delay for self-hosted
 
     for type_name, specs in poi_passes:
         type_found = 0
@@ -606,12 +611,12 @@ def overpass_combined_query(
             "Querying %s (%d segments, %d specs per segment)", type_name, len(segments), len(specs)
         )
         for seg_idx, seg in enumerate(segments):
-            if request_count > 0:
-                time.sleep(2.0)
+            if request_count > 0 and delay > 0:
+                time.sleep(delay)
             poly = _poly_str(seg)
             query = _build_query(poly, specs, timeout)
             try:
-                elements = _run_overpass(query, timeout)
+                elements = _run_overpass(query, timeout, url=overpass_url)
                 request_count += 1
                 seg_new = 0
                 for el in elements:
@@ -1297,6 +1302,11 @@ def main():
         default=os.environ.get("OSRM_URL", "https://router.project-osrm.org"),
         help="OSRM server URL (default: public demo; set OSRM_URL for self-hosted)",
     )
+    parser.add_argument(
+        "--overpass-url",
+        default=os.environ.get("OVERPASS_URL", "https://overpass-api.de/api/interpreter"),
+        help="Overpass API URL (set OVERPASS_URL for self-hosted)",
+    )
 
     # Vehicle (defaults are None to detect explicit usage)
     parser.add_argument(
@@ -1548,12 +1558,16 @@ def main():
                 print(c(f"FAIL {e}", C.RED))
                 sys.exit(1)
 
-        # For compare mode with ORS: request toll-free, ferry-free, and scenic variants
-        if route_mode == "compare" and all_route_options and api_key:
+        # For compare mode: request toll-free, ferry-free, and scenic variants
+        # Works with ORS (api_key) or self-hosted OSRM (osrm_self_hosted)
+        can_avoid = api_key or osrm_self_hosted
+        if route_mode == "compare" and all_route_options and can_avoid:
             default_analysis = all_route_options[0][2]
 
             # Toll-free variant (cheapest)
-            if default_analysis["has_toll"]:
+            # With ORS: only if tolls detected. With OSRM: always try (can't detect tolls).
+            should_try_toll_free = default_analysis["has_toll"] or osrm_self_hosted
+            if should_try_toll_free:
                 try:
                     print(f"  {c('->', C.GREEN)} Requesting toll-free route...", end=" ", flush=True)
                     no_toll_routes = route_request(waypoints, api_key, osrm_url=args.osrm_url, avoid=["tollways"])
@@ -1565,7 +1579,8 @@ def main():
                     print(c("N/A (no toll-free route exists)", C.GREY))
 
             # Ferry-free variant
-            if default_analysis["has_ferry"]:
+            should_try_ferry_free = default_analysis["has_ferry"] or osrm_self_hosted
+            if should_try_ferry_free:
                 try:
                     print(f"  {c('->', C.GREEN)} Requesting ferry-free route...", end=" ", flush=True)
                     no_ferry_routes = route_request(waypoints, api_key, osrm_url=args.osrm_url, avoid=["ferries"])
@@ -1781,6 +1796,7 @@ def main():
                 hotel_radius=hotel_radius,
                 rest_radius=rest_radius,
                 progress_fn=_progress,
+                overpass_url=args.overpass_url,
             )
             total_found = sum(len(v) for v in pois.values())
             print(f"  {c('->', C.GREEN)} {c(f'OK  ({total_found} POIs found)', C.GREEN)}")
