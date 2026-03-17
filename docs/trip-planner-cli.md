@@ -412,7 +412,10 @@ If the JSON file cannot be read or parsed, the tool prints the error and calls `
 
 - **OSRM demo server limitations**: The public OSRM demo at `https://router.project-osrm.org` does not support the `exclude` parameter, does not provide toll class information, and may rate-limit heavy usage. For full functionality, use `setup-osrm.sh` to run a self-hosted instance with Europe data (~30GB disk, ~30min processing).
 - **Overpass rate limiting strategy**: POI types are queried sequentially (not in parallel) with a 2-second inter-request delay when using the public API. Segments within a type are also sequential. This conservative approach avoids 429 errors but means POI queries for a long route can take several minutes. When `--overpass-url` points to a local instance (detected by `localhost` in the URL), all delays are skipped and queries complete in seconds.
-- **Self-hosted services**: `setup-local.sh` automates Docker setup for both OSRM and Overpass using the same Europe PBF file (~25GB download, shared between services). OSRM processes in ~25 min, Overpass in ~30 min. Set `OSRM_URL` and `OVERPASS_URL` environment variables to point at the local instances. Total speedup: from ~2 minutes to ~15 seconds for a full trip plan.
+- **Self-hosted services and automatic fallback**: Both OSRM and Overpass can run locally via Docker. If a local service is unreachable, the tool automatically falls back to the public API (logged as WARNING, no manual switching needed). Setup:
+  - **OSRM** (routing): `./setup-osrm.sh` -- downloads Europe PBF (~25GB), processes (~30 min), starts on port 5000. Enables `exclude=toll,ferry,motorway`. Set `export OSRM_URL=http://localhost:5000`.
+  - **Overpass** (POIs): `./setup-overpass.sh` -- downloads country extracts (GB/FR/IT/DE/CH ~14GB total), merges with `osmium` via Docker, imports (~1 hour). Set `export OVERPASS_URL=http://localhost:12346/api/interpreter`. Note: full Europe PBF fails; use country extracts.
+  - **Switching**: Stop containers (`docker stop osrm-europe overpass-europe`) and the tool falls back automatically. Or `unset OSRM_URL OVERPASS_URL`. No code changes needed.
 - **Single-file design**: The entire tool is 1905 lines in one file, above the 500-line preference. This is intentional -- the project constraint is a single-file CLI with zero pip dependencies. The file is organized into clearly separated sections with comment headers.
 - **`--load-data` enables render-only mode**: When loading cached data, all API calls (geocoding, routing, POI queries) are skipped entirely. This enables fast iteration on output formatting, vehicle parameters, and export options without network access.
 - **Currency conversion**: The `estimate_toll_cost()` function uses hardcoded exchange rates (EUR to GBP: 0.86, EUR to USD: 1.08). These are approximate and not updated dynamically.
@@ -426,6 +429,7 @@ If the JSON file cannot be read or parsed, the tool prints the error and calls `
 |------|---------|-------------|
 | 2026-03-16 | be596e5 | Initial documentation |
 | 2026-03-17 | 767a160 | Added `--osrm-url`, `--overpass-url`, self-hosted OSRM/Overpass support, `setup-local.sh` |
+| 2026-03-17 | HEAD | Auto-fallback for OSRM/Overpass, ORS ferry false-positive filter, default Compact Petrol |
 
 ---
 

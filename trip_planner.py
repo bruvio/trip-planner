@@ -180,9 +180,10 @@ def _route_ors(waypoints, api_key, alternatives=False, avoid=None):
         "coordinates": coords,
         "geometry": True,
         "instructions": True,
-        "extra_info": ["tollways", "waytypes"],
+        "extra_info": ["tollways"],
     }
-    if alternatives:
+    if alternatives and len(coords) == 2:
+        # ORS only supports alternatives with exactly 2 waypoints
         body["alternative_routes"] = {
             "target_count": 3,
             "share_factor": 0.6,
@@ -202,8 +203,13 @@ def _route_ors(waypoints, api_key, alternatives=False, avoid=None):
         },
     )
     log.debug("ORS request: %d bytes, avoid=%s, alternatives=%s", len(req_body), avoid, alternatives)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode() if e.fp else ""
+        log.error("ORS HTTP %d: %s", e.code, error_body[:500])
+        raise RuntimeError(f"ORS HTTP {e.code}: {error_body[:200]}") from e
 
     features = data.get("features", [])
     if not features:
@@ -217,15 +223,20 @@ def _route_ors(waypoints, api_key, alternatives=False, avoid=None):
         segments = props.get("segments", [])
 
         # Detect ferry from step types (type 6 = ferry)
+        # Filter out false positives: bridges/tunnels show as type 6 with 0 distance
+        # Real ferries have >1km distance and >5 min duration
         ferry_segments = []
         for seg in segments:
             for step in seg.get("steps", []):
                 if step.get("type") == 6:
-                    ferry_segments.append({
-                        "name": step.get("name", "Ferry"),
-                        "distance_km": step.get("distance", 0) / 1000,
-                        "duration_min": step.get("duration", 0) / 60,
-                    })
+                    dist_km = step.get("distance", 0) / 1000
+                    dur_min = step.get("duration", 0) / 60
+                    if dist_km > 1 and dur_min > 5:
+                        ferry_segments.append({
+                            "name": step.get("name", "Ferry"),
+                            "distance_km": dist_km,
+                            "duration_min": dur_min,
+                        })
 
         # Toll info from extras
         tollway_summary = extras.get("tollways", {}).get("summary", [])
@@ -259,11 +270,17 @@ def _route_ors(waypoints, api_key, alternatives=False, avoid=None):
 
 
 OSRM_DEFAULT_URL = "https://router.project-osrm.org"
+_osrm_fallback_url = None
 
 
 def _route_osrm(waypoints, alternatives=False, exclude=None, base_url=None):
-    """Route via OSRM. Supports self-hosted with exclude=toll,ferry,motorway."""
-    base = (base_url or OSRM_DEFAULT_URL).rstrip("/")
+    """Route via OSRM. Supports self-hosted with exclude=toll,ferry,motorway.
+
+    If the configured URL fails with connection error, automatically falls back
+    to the public OSRM demo (without exclude support).
+    """
+    global _osrm_fallback_url
+    base = (_osrm_fallback_url or base_url or OSRM_DEFAULT_URL).rstrip("/")
     is_self_hosted = base != OSRM_DEFAULT_URL
     coords = ";".join(f"{p['lon']},{p['lat']}" for p in waypoints)
     params = "overview=full&geometries=geojson&steps=true"
@@ -273,7 +290,20 @@ def _route_osrm(waypoints, alternatives=False, exclude=None, base_url=None):
         params += f"&exclude={exclude}"
     url = f"{base}/route/v1/driving/{coords}?{params}"
     log.debug("OSRM request: %s", url[:120])
-    data = http_get(url)
+    try:
+        data = http_get(url)
+    except (urllib.error.URLError, ConnectionError, OSError) as e:
+        if base != OSRM_DEFAULT_URL and _osrm_fallback_url is None:
+            log.warning("OSRM at %s unreachable (%s), falling back to public demo", base, e)
+            _osrm_fallback_url = OSRM_DEFAULT_URL
+            # Retry without exclude (public demo doesn't support it)
+            params_fallback = "overview=full&geometries=geojson&steps=true"
+            if alternatives:
+                params_fallback += "&alternatives=true"
+            url = f"{OSRM_DEFAULT_URL}/route/v1/driving/{coords}?{params_fallback}"
+            data = http_get(url)
+        else:
+            raise
     if data.get("code") != "Ok":
         raise RuntimeError("Routing failed: " + data.get("message", "unknown error"))
 
@@ -516,12 +546,32 @@ def _build_query(poly_str, poi_specs, timeout):
     return f"[out:json][timeout:{timeout}];(" + "".join(parts) + ");out center 200;"
 
 
+OVERPASS_PUBLIC = "https://overpass-api.de/api/interpreter"
+_overpass_fallback_active = False
+
+
 def _run_overpass(query, timeout=60, url=None):
-    """Execute a single Overpass query, return elements list."""
+    """Execute a single Overpass query, return elements list.
+
+    If the configured URL fails with connection error, automatically falls back
+    to the public Overpass API.
+    """
+    global _overpass_fallback_active
     endpoint = url or OVERPASS_URL
+    if _overpass_fallback_active:
+        endpoint = OVERPASS_PUBLIC
     log.debug("Overpass query: %d chars, timeout=%ds, url=%s", len(query), timeout, endpoint[:60])
     data_enc = urllib.parse.urlencode({"data": query})
-    result = http_post(endpoint, data_enc, timeout=timeout + 15)
+    try:
+        result = http_post(endpoint, data_enc, timeout=timeout + 15)
+    except (urllib.error.URLError, ConnectionError, OSError) as e:
+        if endpoint != OVERPASS_PUBLIC and not _overpass_fallback_active:
+            log.warning("Overpass at %s unreachable (%s), falling back to public API", endpoint[:60], e)
+            _overpass_fallback_active = True
+            endpoint = OVERPASS_PUBLIC
+            result = http_post(endpoint, data_enc, timeout=timeout + 15)
+        else:
+            raise
     elements = result.get("elements", [])
     log.debug("Overpass returned %d elements", len(elements))
     return elements
@@ -851,7 +901,7 @@ def prompt_vehicle_config(args):
         print(f"    [{key}] {name}")
     print("    [0] Custom")
     print()
-    choice = input("  Choice [1]: ").strip() or "1"
+    choice = input("  Choice [3]: ").strip() or "3"
 
     if choice in VEHICLE_PRESETS:
         name, fuel_type, eff, tank, price, currency = VEHICLE_PRESETS[choice]
@@ -1634,8 +1684,9 @@ def main():
                 else:
                     detail_parts.append("no tolls")
                 if analysis["has_ferry"]:
-                    names = [s["name"] for s in analysis["ferry_segments"]]
-                    detail_parts.append(f"ferry: {', '.join(names)}")
+                    n_ferries = len(analysis["ferry_segments"])
+                    first_name = analysis["ferry_segments"][0]["name"]
+                    detail_parts.append(f"ferry: {n_ferries}x ({first_name})")
                 detail_parts.append(f"total: ~{sym_preview}{fuel_est['total']:.0f}")
                 print(f"      {c(' | ', C.GREY).join(detail_parts)}")
                 print()
