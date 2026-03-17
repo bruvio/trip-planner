@@ -126,7 +126,8 @@ be changed on reload.
 | OSRM Public Demo | `router.project-osrm.org/route/v1/driving/` | `_route_osrm()` | None | Best-effort (demo server, no SLA) |
 | OSRM Self-Hosted | Configurable via `OSRM_URL` env var | `_route_osrm()` | None | Unlimited (local Docker container) |
 | OpenRouteService | `api.openrouteservice.org/v2/directions/driving-car/geojson` | `_route_ors()` | API key (Authorization header) | 40 req/min (free tier) |
-| Overpass API | `overpass-api.de/api/interpreter` | `overpass_combined_query()` via `_run_overpass()` | None | ~2 req/10s recommended; 429/504 retried with exponential backoff |
+| Overpass Public | `overpass-api.de/api/interpreter` | `overpass_combined_query()` via `_run_overpass()` | None | ~2 req/10s recommended; 429/504 retried with exponential backoff; 2s inter-query delay enforced |
+| Overpass Self-Hosted | Configurable via `OVERPASS_URL` env var | `overpass_combined_query()` via `_run_overpass()` | None | Unlimited; inter-query delays skipped when URL contains `localhost` |
 | CartoDB Tiles | `{s}.basemaps.cartocdn.com/rastertiles/voyager/` | Used in `MAP_TEMPLATE` and `trip_planner.html` | None | Unlimited (CDN-served) |
 
 ---
@@ -367,8 +368,12 @@ alternative routes) but requires a free API key signup. OSRM's public demo requi
 nothing -- a user can run `python trip_planner.py --from Oxford --to Rome` and get
 a working route immediately. The dual strategy gives the best out-of-box experience
 (OSRM, no signup) with an upgrade path (ORS, full features). Self-hosted OSRM via
-`setup-osrm.sh` provides a middle ground: no API key needed, full exclude support,
-sub-100ms latency, but requires Docker and ~30 GB disk space.
+`setup-local.sh` provides a middle ground: no API key needed, full exclude support,
+sub-100ms routing latency, and sub-second POI queries, but requires Docker and
+~30 GB disk space per service. The same Europe PBF file is shared between OSRM
+and Overpass. When `OVERPASS_URL` points to localhost, the tool detects this and
+skips all inter-query rate-limit delays, reducing POI query time from ~2 minutes
+to ~10 seconds.
 
 ---
 

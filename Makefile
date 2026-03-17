@@ -36,6 +36,10 @@ test-cov:  ## run tests with coverage
 run:  ## run trip planner (pass ARGS, e.g. make run ARGS='--from Oxford --to London')
 	$(PYTHON) trip_planner.py $(ARGS)
 
+serve:  ## serve browser app at http://localhost:8080 (fixes CORS for local APIs)
+	@echo "Open http://localhost:8080/trip_planner.html"
+	$(PYTHON) -m http.server 8080
+
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
@@ -57,5 +61,5 @@ pre-commit-run:  ## run all pre-commit hooks
 help:  ## print help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: all lint format format-check test test-cov run check clean \
+.PHONY: all lint format format-check test test-cov run serve check clean \
         pre-commit-install pre-commit-run help

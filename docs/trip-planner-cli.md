@@ -31,7 +31,7 @@ Detailed walkthrough of `main()` (starts at line ~1272 in `trip_planner.py`):
 `argparse.ArgumentParser` defines 30+ arguments organized into six groups:
 
 - **Route**: `--from`, `--to`, `--via` (repeatable)
-- **API config**: `--api-key`, `--osrm-url`
+- **API config**: `--api-key`, `--osrm-url`, `--overpass-url`
 - **Vehicle**: `--fuel-type`, `--consumption`/`--efficiency`, `--tank`, `--fuel-price`, `--kwh`, `--kwh-price`, `--tolls`, `--currency`
 - **Interactive**: `-i`/`--interactive`
 - **Route mode**: `--route-mode` (fastest, shortest, no-tolls, no-ferries, scenic, compare)
@@ -140,7 +140,8 @@ Works identically whether data was fetched or loaded from cache:
 | Route | `--to` | str | required | End location |
 | Route | `--via` | str (repeat) | [] | Intermediate stops |
 | API | `--api-key` | str | `$ORS_API_KEY` | OpenRouteService API key |
-| API | `--osrm-url` | str | `$OSRM_URL` or public demo | OSRM server URL |
+| API | `--osrm-url` | str | `$OSRM_URL` or public demo | OSRM server URL (self-hosted enables exclude filters) |
+| API | `--overpass-url` | str | `$OVERPASS_URL` or public API | Overpass API URL (self-hosted skips rate-limit delays) |
 | Vehicle | `--fuel-type` | choice | diesel | petrol, diesel, electric, hybrid |
 | Vehicle | `--consumption` / `--efficiency` | float | 6.5 | L/100km |
 | Vehicle | `--tank` | float | 60 | Tank size (litres) |
@@ -410,7 +411,8 @@ If the JSON file cannot be read or parsed, the tool prints the error and calls `
 ### Notes
 
 - **OSRM demo server limitations**: The public OSRM demo at `https://router.project-osrm.org` does not support the `exclude` parameter, does not provide toll class information, and may rate-limit heavy usage. For full functionality, use `setup-osrm.sh` to run a self-hosted instance with Europe data (~30GB disk, ~30min processing).
-- **Overpass rate limiting strategy**: POI types are queried sequentially (not in parallel) with a 2-second inter-request delay. Segments within a type are also sequential. This conservative approach avoids 429 errors but means POI queries for a long route can take several minutes.
+- **Overpass rate limiting strategy**: POI types are queried sequentially (not in parallel) with a 2-second inter-request delay when using the public API. Segments within a type are also sequential. This conservative approach avoids 429 errors but means POI queries for a long route can take several minutes. When `--overpass-url` points to a local instance (detected by `localhost` in the URL), all delays are skipped and queries complete in seconds.
+- **Self-hosted services**: `setup-local.sh` automates Docker setup for both OSRM and Overpass using the same Europe PBF file (~25GB download, shared between services). OSRM processes in ~25 min, Overpass in ~30 min. Set `OSRM_URL` and `OVERPASS_URL` environment variables to point at the local instances. Total speedup: from ~2 minutes to ~15 seconds for a full trip plan.
 - **Single-file design**: The entire tool is 1905 lines in one file, above the 500-line preference. This is intentional -- the project constraint is a single-file CLI with zero pip dependencies. The file is organized into clearly separated sections with comment headers.
 - **`--load-data` enables render-only mode**: When loading cached data, all API calls (geocoding, routing, POI queries) are skipped entirely. This enables fast iteration on output formatting, vehicle parameters, and export options without network access.
 - **Currency conversion**: The `estimate_toll_cost()` function uses hardcoded exchange rates (EUR to GBP: 0.86, EUR to USD: 1.08). These are approximate and not updated dynamically.
@@ -422,7 +424,8 @@ If the JSON file cannot be read or parsed, the tool prints the error and calls `
 
 | Date | Git Ref | What Changed |
 |------|---------|-------------|
-| | | Initial documentation |
+| 2026-03-16 | be596e5 | Initial documentation |
+| 2026-03-17 | 767a160 | Added `--osrm-url`, `--overpass-url`, self-hosted OSRM/Overpass support, `setup-local.sh` |
 
 ---
 
